@@ -3,98 +3,95 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { filesForNewBatch, ReviewDemo } from "./ReviewDemo";
 
+const account = {
+  id: "account-1", name: "默认飞书账号", appIdMasked: "cli_aa0***cc8", validationStatus: "valid",
+  lastValidatedAt: "2026-08-21T00:00:00.000Z", activeTaskId: "task-1", isActive: true,
+};
+const task = {
+  id: "task-1", accountId: "account-1", name: "默认任务",
+  spreadsheetUrl: "https://example.feishu.cn/sheets/sht1", effectiveShareMode: "anyone_editable",
+  activeTaskSheetId: "sheet-1", setupStatus: "ready", setupStep: "ready", errorMessage: null,
+};
+const detail = {
+  task,
+  sheets: [{ id: "sheet-1", name: "0821素材审核", sheetId: "remote-1", setupStatus: "ready", setupError: null, nextRow: 75 }],
+  assets: [], checks: [], overallStatus: "pending",
+};
+
+function json(data: unknown, status = 200) {
+  return Promise.resolve(new Response(JSON.stringify({ ok: true, data }), { status }));
+}
+
+function workspaceFetcher() {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/accounts") return json({ accounts: [account], activeAccountId: account.id });
+    if (url === "/api/tasks") return json({ tasks: [task], activeTaskId: task.id });
+    if (url === "/api/tasks/task-1") return json(detail);
+    return json({});
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("飞书客户素材审核单页", () => {
+describe("可复用飞书素材审核工具", () => {
   it("新批次只提交尚未同步的文件", () => {
     const files = [
       { id: "done", status: "completed" },
       { id: "new", status: "queued" },
       { id: "failed", status: "failed" },
     ];
-
     expect(filesForNewBatch(files)).toEqual([{ id: "new", status: "queued" }]);
   });
 
-  it("展示固定审核电子表格、一键导入、同步记录和完整验证区", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, data: { status: "uninitialized", destination: null } })),
-    ));
-
+  it("未配置账号时只显示本地应用凭证入口，不显示 OAuth 或机器人入口", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => json({ accounts: [], activeAccountId: null })));
     render(<ReviewDemo />);
-
-    expect(screen.getByRole("heading", { name: "飞书客户素材审核 POC" })).toBeInTheDocument();
-    expect(await screen.findByText("应用身份模式")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "飞书客户素材审核工具" })).toBeInTheDocument();
+    expect(await screen.findByText("飞书应用账号")).toBeInTheDocument();
+    expect(screen.getByLabelText("App ID")).toBeInTheDocument();
+    expect(screen.getByLabelText("App Secret")).toHaveAttribute("type", "password");
     expect(screen.queryByText("连接飞书")).not.toBeInTheDocument();
-    expect(screen.queryByText("新项目名称")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "固定审核电子表格" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "上传审核素材" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "一键导入到审核表" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "同步记录" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "飞书能力验证" })).toBeInTheDocument();
-    expect(screen.getByText("创建电子表格")).toBeInTheDocument();
-    expect(screen.getByText("写入附件单元格")).toBeInTheDocument();
-    expect(screen.queryByText(/Base|多维表格/)).not.toBeInTheDocument();
+    expect(screen.queryByText("创建机器人")).not.toBeInTheDocument();
   });
 
-  it("首次导入会先确保固定审核表", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { status: "uninitialized", destination: null } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        ok: false,
-        error: { code: "ENSURE_DESTINATION_FAILED", message: "测试中止", retryable: false },
-      }), { status: 502 }));
-    vi.stubGlobal("fetch", fetcher);
-    const { container } = render(<ReviewDemo />);
-    await screen.findByText("应用身份模式");
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File(["video"], "one.mp4", { type: "video/mp4" })] } });
-    fireEvent.click(screen.getByRole("button", { name: "一键导入到审核表" }));
-
-    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
-      "/api/destination/ensure",
-      expect.objectContaining({ method: "POST" }),
-    ));
-  });
-
-  it("取消重建确认时不会调用重建接口", async () => {
-    const destination = {
-      id: "destination-1",
-      name: "客户素材审核",
-      requestedShareMode: "anyone_editable",
-      effectiveShareMode: "anyone_editable",
-      resourceType: "sheet",
-      spreadsheetUrl: "https://example.feishu.cn/sheets/sht1",
-      currentSheetName: "0821素材审核",
-      setupStatus: "ready",
-      setupStep: "ready",
-      errorMessage: null,
-    };
-    const fetcher = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { status: "ready", destination } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        ok: true,
-        data: { project: destination, assets: [], checks: [], overallStatus: "pending" },
-      })));
-    vi.stubGlobal("fetch", fetcher);
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("恢复账号、任务和上次选中的工作表，并保留导入与验证区", async () => {
+    vi.stubGlobal("fetch", workspaceFetcher());
     render(<ReviewDemo />);
-    await screen.findByRole("link", { name: "打开审核表" });
-    expect(screen.getByText("当前工作表：0821素材审核")).toBeInTheDocument();
-    expect(screen.queryByText(/Base|多维表格/)).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "默认任务" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "飞书账号" })).toHaveValue("account-1");
+    expect(screen.getByText("0821素材审核")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /导入到「0821素材审核」/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "同步记录" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "能力验证" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开审核表" })).toHaveAttribute("href", task.spreadsheetUrl);
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "重建审核表" }));
-
-    expect(window.confirm).toHaveBeenCalled();
-    expect(fetcher).not.toHaveBeenCalledWith(
-      "/api/destination/rebuild",
-      expect.objectContaining({ method: "POST" }),
-    );
+  it("可提前命名并在同一任务内创建新工作表", async () => {
+    const fetcher = workspaceFetcher();
+    fetcher.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/tasks/task-1/sheets" && init?.method === "POST") {
+        return json({ id: "sheet-2", name: "0827素材审核", setupStatus: "ready" }, 201);
+      }
+      if (url === "/api/accounts") return json({ accounts: [account], activeAccountId: account.id });
+      if (url === "/api/tasks") return json({ tasks: [task], activeTaskId: task.id });
+      if (url === "/api/tasks/task-1") return json(detail);
+      return json({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<ReviewDemo />);
+    await screen.findByRole("heading", { name: "默认任务" });
+    fireEvent.click(screen.getByRole("button", { name: "＋ 新增工作表" }));
+    fireEvent.change(screen.getByPlaceholderText("提前设置工作表名称"), { target: { value: "0827素材审核" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并选中" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith(
+      "/api/tasks/task-1/sheets",
+      expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }) }),
+    ));
   });
 });

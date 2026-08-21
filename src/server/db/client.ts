@@ -6,6 +6,22 @@ import { schema } from "./schema";
 
 const DDL = `
 PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS feishu_accounts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  app_id TEXT NOT NULL UNIQUE,
+  app_secret_ciphertext TEXT NOT NULL,
+  validation_status TEXT NOT NULL DEFAULT 'unverified',
+  last_validated_at TEXT,
+  active_task_id TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS app_state (
+  id TEXT PRIMARY KEY,
+  active_account_id TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS feishu_connections (
   local_user_id TEXT PRIMARY KEY,
   feishu_open_id TEXT NOT NULL,
@@ -33,6 +49,9 @@ CREATE TABLE IF NOT EXISTS projects (
   default_table_deleted INTEGER NOT NULL DEFAULT 0,
   spreadsheet_token TEXT,
   spreadsheet_url TEXT,
+  account_id TEXT,
+  active_task_sheet_id TEXT,
+  initial_sheet_name TEXT,
   setup_status TEXT NOT NULL DEFAULT 'draft',
   setup_step TEXT NOT NULL DEFAULT 'draft',
   error_code TEXT,
@@ -53,6 +72,7 @@ CREATE TABLE IF NOT EXISTS assets (
   file_token TEXT,
   record_id TEXT,
   sheet_id TEXT,
+  task_sheet_id TEXT,
   sheet_row_number INTEGER,
   status TEXT NOT NULL DEFAULT 'queued',
   error_code TEXT,
@@ -63,6 +83,22 @@ CREATE TABLE IF NOT EXISTS assets (
   UNIQUE(project_id, material_number),
   UNIQUE(project_id, batch_id, id),
   FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE TABLE IF NOT EXISTS task_sheets (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  create_key TEXT NOT NULL,
+  sheet_id TEXT,
+  name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  next_row INTEGER NOT NULL DEFAULT 2,
+  setup_status TEXT NOT NULL DEFAULT 'creating',
+  setup_error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(task_id, create_key),
+  UNIQUE(task_id, normalized_name),
+  FOREIGN KEY(task_id) REFERENCES projects(id)
 );
 CREATE TABLE IF NOT EXISTS sheet_tabs (
   id TEXT PRIMARY KEY,
@@ -116,7 +152,11 @@ export function createDatabase(filename: string) {
   ensureColumn(sqlite, "projects", "resource_type", "resource_type TEXT NOT NULL DEFAULT 'base'");
   ensureColumn(sqlite, "projects", "spreadsheet_token", "spreadsheet_token TEXT");
   ensureColumn(sqlite, "projects", "spreadsheet_url", "spreadsheet_url TEXT");
+  ensureColumn(sqlite, "projects", "account_id", "account_id TEXT");
+  ensureColumn(sqlite, "projects", "active_task_sheet_id", "active_task_sheet_id TEXT");
+  ensureColumn(sqlite, "projects", "initial_sheet_name", "initial_sheet_name TEXT");
   ensureColumn(sqlite, "assets", "sheet_id", "sheet_id TEXT");
+  ensureColumn(sqlite, "assets", "task_sheet_id", "task_sheet_id TEXT");
   ensureColumn(sqlite, "assets", "sheet_row_number", "sheet_row_number INTEGER");
   return {
     db: drizzle(sqlite, { schema }),

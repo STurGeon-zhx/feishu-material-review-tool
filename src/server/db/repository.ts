@@ -2,7 +2,15 @@ import { and, count, desc, eq, inArray, isNotNull, max, ne, or, sql } from "driz
 import { formatMaterialNumber } from "../core/batching";
 import { validateDeclaredFile } from "../uploads/policy";
 import type { AppDatabase } from "./client";
-import { assets, destinationLocks, projects, sheetTabs, verificationChecks, type ResourceType } from "./schema";
+import {
+  assets,
+  destinationLocks,
+  projects,
+  sheetTabs,
+  taskSheets,
+  verificationChecks,
+  type ResourceType,
+} from "./schema";
 
 export type ShareMode = "anyone_readable" | "anyone_editable";
 
@@ -15,6 +23,8 @@ export function createOrGetProject(
     name: string;
     requestedShareMode: ShareMode;
     resourceType?: ResourceType;
+    accountId?: string | null;
+    initialSheetName?: string | null;
   },
 ) {
   const existing = db.select().from(projects).where(eq(projects.createKey, input.createKey)).get();
@@ -106,6 +116,70 @@ export function updateProject(
 
 export function listProjects(db: AppDatabase, localUserId: string) {
   return db.select().from(projects).where(eq(projects.localUserId, localUserId)).orderBy(desc(projects.createdAt)).all();
+}
+
+export function listTasksByAccount(db: AppDatabase, accountId: string) {
+  return db.select().from(projects).where(and(
+    eq(projects.accountId, accountId),
+    eq(projects.resourceType, "sheet"),
+  )).orderBy(desc(projects.updatedAt), desc(projects.createdAt)).all();
+}
+
+export function getTaskByName(db: AppDatabase, accountId: string, normalizedName: string) {
+  return listTasksByAccount(db, accountId).find((task) => task.name.trim().toLocaleLowerCase("zh-CN") === normalizedName);
+}
+
+export function getTaskSheet(db: AppDatabase, taskSheetId: string) {
+  return db.select().from(taskSheets).where(eq(taskSheets.id, taskSheetId)).get();
+}
+
+export function getTaskSheetByCreateKey(db: AppDatabase, taskId: string, createKey: string) {
+  return db.select().from(taskSheets).where(and(
+    eq(taskSheets.taskId, taskId),
+    eq(taskSheets.createKey, createKey),
+  )).get();
+}
+
+export function getTaskSheetByName(db: AppDatabase, taskId: string, normalizedName: string) {
+  return db.select().from(taskSheets).where(and(
+    eq(taskSheets.taskId, taskId),
+    eq(taskSheets.normalizedName, normalizedName),
+  )).get();
+}
+
+export function listTaskSheets(db: AppDatabase, taskId: string) {
+  return db.select().from(taskSheets).where(eq(taskSheets.taskId, taskId)).orderBy(taskSheets.createdAt).all();
+}
+
+export function createTaskSheet(db: AppDatabase, value: typeof taskSheets.$inferInsert) {
+  db.insert(taskSheets).values(value).onConflictDoNothing().run();
+  return getTaskSheetByCreateKey(db, value.taskId, value.createKey)!;
+}
+
+export function updateTaskSheet(
+  db: AppDatabase,
+  taskSheetId: string,
+  values: Partial<typeof taskSheets.$inferInsert>,
+) {
+  db.update(taskSheets).set({ ...values, updatedAt: sql`datetime('now')` })
+    .where(eq(taskSheets.id, taskSheetId)).run();
+  return getTaskSheet(db, taskSheetId);
+}
+
+export function setActiveTaskSheet(db: AppDatabase, taskId: string, taskSheetId: string) {
+  const sheet = getTaskSheet(db, taskSheetId);
+  if (!sheet || sheet.taskId !== taskId) throw new Error("工作表不属于当前任务");
+  return updateProject(db, taskId, { activeTaskSheetId: taskSheetId });
+}
+
+export function canRegisterTaskBatch(db: AppDatabase, taskId: string, taskSheetId: string): boolean {
+  const task = getProject(db, taskId);
+  const sheet = getTaskSheet(db, taskSheetId);
+  const locked = db.select().from(destinationLocks).where(eq(destinationLocks.projectId, taskId)).get();
+  const importable = task?.setupStatus === "ready"
+    || (task?.setupStatus === "partial" && task.setupStep === "share_permission_failed");
+  return Boolean(task && task.resourceType === "sheet" && task.accountId && importable
+    && sheet?.taskId === taskId && sheet.setupStatus === "ready" && sheet.sheetId && !locked);
 }
 
 export function getAsset(db: AppDatabase, assetId: string) {
@@ -207,6 +281,7 @@ export function registerBatch(
   projectId: string,
   batchId: string,
   files: Array<{ id: string; name: string; type: string; size: number }>,
+  taskSheetId?: string,
 ) {
   if (files.length === 0) throw new Error("至少选择一个文件");
   files.forEach(validateDeclaredFile);
@@ -231,6 +306,7 @@ export function registerBatch(
       fileName: file.name,
       mimeType: file.type,
       fileSize: file.size,
+      taskSheetId: taskSheetId ?? null,
     }));
     tx.insert(assets).values(rows).run();
     return tx.select().from(assets).where(and(eq(assets.projectId, projectId), eq(assets.batchId, batchId))).all();

@@ -3,6 +3,7 @@ node_modules/
 coverage/
 .env.local
 data/*.db*
+data/*.key
 *.log
 playwright-report/
 test-results/

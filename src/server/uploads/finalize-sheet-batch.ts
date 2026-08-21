@@ -5,11 +5,12 @@ import { SingleFlight } from "../core/single-flight";
 import type { AppDatabase } from "../db/client";
 import {
   getProject,
-  isActiveDestination,
+  getTaskSheet,
   listRecoverableBatchIds,
   setAssetSheetLocation,
   updateAsset,
   updateSheetTab,
+  updateTaskSheet,
   upsertVerification,
 } from "../db/repository";
 import { assets } from "../db/schema";
@@ -36,20 +37,15 @@ export interface SheetWriteApi {
   ): Promise<void>;
 }
 
-interface DailySheetTarget {
+interface TaskSheetTarget {
   id: string;
   sheetId: string;
-  sheetName: string;
   nextRow: number;
   setupStatus: string;
 }
 
-interface DailySheetProvider {
-  ensure(
-    projectId: string,
-    spreadsheetToken: string,
-    date: Date,
-  ): Promise<DailySheetTarget>;
+interface LegacyDailySheetProvider {
+  ensure(projectId: string, spreadsheetToken: string, date: Date): Promise<TaskSheetTarget>;
 }
 
 interface RemoteAssetRow {
@@ -137,8 +133,8 @@ export class SheetBatchFinalizer {
 
   constructor(
     private readonly db: AppDatabase,
-    private readonly createApi: () => Promise<SheetWriteApi>,
-    private readonly dailySheet: DailySheetProvider,
+    private readonly createApi: (accountId: string) => Promise<SheetWriteApi>,
+    private readonly legacyDailySheet?: LegacyDailySheetProvider,
   ) {}
 
   run(projectId: string, batchId: string): Promise<{ completed: number; failed: number }> {
@@ -164,7 +160,7 @@ export class SheetBatchFinalizer {
     if (
       !project
       || project.resourceType !== "sheet"
-      || !isActiveDestination(this.db, projectId)
+      || (!project.accountId && !this.legacyDailySheet)
       || !project.spreadsheetToken
       || !importable
     ) {
@@ -178,17 +174,25 @@ export class SheetBatchFinalizer {
       ne(assets.status, "completed"),
     )).all();
     if (pendingAssets.length === 0) return { completed: 0, failed: 0 };
-
-    const dailyTab = await this.dailySheet.ensure(
-      projectId,
-      project.spreadsheetToken,
-      parseSqliteDate(pendingAssets[0].createdAt),
-    );
-    if (dailyTab.setupStatus !== "ready") throw new Error("当天审核工作表尚未完成配置");
-    const api = await this.createApi();
-    return this.sheetMutex.run(`${projectId}:${dailyTab.sheetId}`, () => this.appendBatch(
+    const taskSheetIds = new Set(pendingAssets.map((asset) => asset.taskSheetId).filter((id): id is string => Boolean(id)));
+    let target: TaskSheetTarget | undefined;
+    if (taskSheetIds.size === 1) {
+      const stored = getTaskSheet(this.db, [...taskSheetIds][0]);
+      if (stored?.sheetId) target = { ...stored, sheetId: stored.sheetId };
+    } else if (this.legacyDailySheet) {
+      target = await this.legacyDailySheet.ensure(
+        projectId,
+        project.spreadsheetToken,
+        parseSqliteDate(pendingAssets[0].createdAt),
+      );
+    }
+    if (!target || target.setupStatus !== "ready" || !target.sheetId) {
+      throw new Error("目标工作表尚未完成配置");
+    }
+    const api = await this.createApi(project.accountId ?? "legacy");
+    return this.sheetMutex.run(`${projectId}:${target.sheetId}`, () => this.appendBatch(
       project,
-      dailyTab,
+      { ...target, sheetId: target.sheetId },
       pendingAssets,
       batchId,
       api,
@@ -197,13 +201,13 @@ export class SheetBatchFinalizer {
 
   private async appendBatch(
     project: NonNullable<ReturnType<typeof getProject>>,
-    dailyTab: DailySheetTarget,
+    taskSheet: TaskSheetTarget,
     pendingAssets: Array<typeof assets.$inferSelect>,
     batchId: string,
     api: SheetWriteApi,
   ): Promise<{ completed: number; failed: number }> {
     const token = project.spreadsheetToken!;
-    const sheetId = dailyTab.sheetId;
+    const sheetId = taskSheet.sheetId;
     const initialRead = await api.getCellRange(token, sheetId, "F2:H50000");
     let remoteIndex = this.remoteIndex(initialRead);
     let completed = 0;
@@ -276,7 +280,11 @@ export class SheetBatchFinalizer {
       }
       remoteIndex = this.remoteIndex(await api.getCellRange(token, sheetId, "F2:H50000"));
       const actualLastRow = Math.max(1, ...[...remoteIndex.values()].map((row) => row.rowNumber));
-      updateSheetTab(this.db, dailyTab.id, { nextRow: actualLastRow + 1 });
+      if (getTaskSheet(this.db, taskSheet.id)) {
+        updateTaskSheet(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
+      } else {
+        updateSheetTab(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
+      }
     }
 
     this.saveVerification(project, batchId, completed, failed, remoteIndex.size);
@@ -319,7 +327,7 @@ export class SheetBatchFinalizer {
   ): Promise<void> {
     const workbook = await api.getWorkbookInfo(token);
     const sheet = workbook.sheets.find((item) => item.sheetId === sheetId);
-    if (!sheet) throw new Error("无法回读当天工作表容量");
+    if (!sheet) throw new Error("无法回读目标工作表容量");
     if (requiredEndRow <= sheet.rowCount) return;
     const count = Math.ceil((requiredEndRow - sheet.rowCount) / ROW_GROWTH_SIZE) * ROW_GROWTH_SIZE;
     await api.insertRows(token, sheetId, sheet.rowCount + 1, count);
