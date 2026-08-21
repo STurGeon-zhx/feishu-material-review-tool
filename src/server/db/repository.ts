@@ -1,23 +1,95 @@
-import { and, count, desc, eq, inArray, max, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, max, ne, or, sql } from "drizzle-orm";
 import { formatMaterialNumber } from "../core/batching";
 import { validateDeclaredFile } from "../uploads/policy";
 import type { AppDatabase } from "./client";
-import { assets, feishuConnections, projects, verificationChecks } from "./schema";
+import { assets, destinationLocks, projects, sheetTabs, verificationChecks, type ResourceType } from "./schema";
 
 export type ShareMode = "anyone_readable" | "anyone_editable";
 
 export function createOrGetProject(
   db: AppDatabase,
-  input: { id: string; createKey: string; localUserId: string; name: string; requestedShareMode: ShareMode },
+  input: {
+    id: string;
+    createKey: string;
+    localUserId: string;
+    name: string;
+    requestedShareMode: ShareMode;
+    resourceType?: ResourceType;
+  },
 ) {
   const existing = db.select().from(projects).where(eq(projects.createKey, input.createKey)).get();
   if (existing) return existing;
-  db.insert(projects).values(input).run();
+  db.insert(projects).values({ ...input, resourceType: input.resourceType ?? "base" }).run();
   return db.select().from(projects).where(eq(projects.id, input.id)).get()!;
 }
 
 export function getProject(db: AppDatabase, projectId: string) {
   return db.select().from(projects).where(eq(projects.id, projectId)).get();
+}
+
+export function getProjectByCreateKey(db: AppDatabase, createKey: string) {
+  return db.select().from(projects).where(eq(projects.createKey, createKey)).get();
+}
+
+export function getActiveProject(db: AppDatabase) {
+  return db
+    .select()
+    .from(projects)
+    .where(
+      and(
+        eq(projects.localUserId, "service_app"),
+        eq(projects.resourceType, "sheet"),
+        or(
+          eq(projects.setupStatus, "ready"),
+          and(eq(projects.setupStatus, "partial"), eq(projects.setupStep, "share_permission_failed")),
+        ),
+      ),
+    )
+    .orderBy(desc(projects.updatedAt), desc(projects.createdAt), sql`rowid DESC`)
+    .get();
+}
+
+export function getPendingEnsureProject(db: AppDatabase) {
+  return db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.localUserId, "service_app"), eq(projects.resourceType, "sheet")))
+    .orderBy(desc(projects.updatedAt), desc(projects.createdAt), sql`rowid DESC`)
+    .all()
+    .find((project) =>
+      project.createKey.startsWith("ensure:")
+      && project.setupStatus !== "ready"
+      && !(project.setupStatus === "partial" && project.setupStep === "share_permission_failed"),
+    );
+}
+
+export function getCurrentDestination(db: AppDatabase) {
+  return getActiveProject(db) ?? getPendingEnsureProject(db);
+}
+
+export function isActiveDestination(db: AppDatabase, projectId: string): boolean {
+  return getActiveProject(db)?.id === projectId;
+}
+
+export function canRegisterDestinationBatch(db: AppDatabase, projectId: string): boolean {
+  const active = getActiveProject(db);
+  const locked = db.select().from(destinationLocks).where(eq(destinationLocks.projectId, projectId)).get();
+  return active?.id === projectId && !locked;
+}
+
+export function lockDestinationRebuild(db: AppDatabase, projectId: string): void {
+  db.insert(destinationLocks)
+    .values({ projectId, kind: "rebuild" })
+    .onConflictDoNothing()
+    .run();
+}
+
+export function unlockDestinationRebuild(db: AppDatabase, projectId: string): void {
+  db.delete(destinationLocks).where(eq(destinationLocks.projectId, projectId)).run();
+}
+
+export function clearDestinationRebuildLocks(db: AppDatabase): void {
+  db.delete(destinationLocks).run();
 }
 
 export function updateProject(
@@ -48,8 +120,82 @@ export function updateAsset(db: AppDatabase, assetId: string, values: Partial<ty
   return getAsset(db, assetId);
 }
 
+export function getSheetTabByDate(db: AppDatabase, projectId: string, localDate: string) {
+  return db
+    .select()
+    .from(sheetTabs)
+    .where(and(eq(sheetTabs.projectId, projectId), eq(sheetTabs.localDate, localDate)))
+    .get();
+}
+
+export function upsertSheetTab(db: AppDatabase, value: typeof sheetTabs.$inferInsert) {
+  db.insert(sheetTabs)
+    .values(value)
+    .onConflictDoUpdate({
+      target: [sheetTabs.projectId, sheetTabs.localDate],
+      set: {
+        sheetId: value.sheetId,
+        sheetName: value.sheetName,
+        nextRow: value.nextRow,
+        setupStatus: value.setupStatus,
+        setupError: value.setupError,
+        updatedAt: sql`datetime('now')`,
+      },
+    })
+    .run();
+  return getSheetTabByDate(db, value.projectId, value.localDate)!;
+}
+
+export function updateSheetTab(
+  db: AppDatabase,
+  id: string,
+  values: Partial<typeof sheetTabs.$inferInsert>,
+) {
+  db.update(sheetTabs)
+    .set({ ...values, updatedAt: sql`datetime('now')` })
+    .where(eq(sheetTabs.id, id))
+    .run();
+  return db.select().from(sheetTabs).where(eq(sheetTabs.id, id)).get();
+}
+
+export function setAssetSheetLocation(
+  db: AppDatabase,
+  assetId: string,
+  sheetId: string,
+  rowNumber: number,
+) {
+  return updateAsset(db, assetId, { sheetId, sheetRowNumber: rowNumber });
+}
+
 export function getProjectAssets(db: AppDatabase, projectId: string) {
   return db.select().from(assets).where(eq(assets.projectId, projectId)).orderBy(assets.materialSequence).all();
+}
+
+export function listRecoverableBatchIds(db: AppDatabase, projectId: string): string[] {
+  return db
+    .selectDistinct({ batchId: assets.batchId })
+    .from(assets)
+    .where(
+      and(
+        eq(assets.projectId, projectId),
+        isNotNull(assets.fileToken),
+        ne(assets.status, "completed"),
+      ),
+    )
+    .all()
+    .map((row) => row.batchId);
+}
+
+export function hasPendingProjectAssets(db: AppDatabase, projectId: string): boolean {
+  return db
+    .select({ status: assets.status, fileToken: assets.fileToken, recordId: assets.recordId })
+    .from(assets)
+    .where(eq(assets.projectId, projectId))
+    .all()
+    .some((asset) =>
+      !new Set(["completed", "failed"]).has(asset.status)
+      || (asset.status !== "completed" && Boolean(asset.fileToken)),
+    );
 }
 
 export function getProjectChecks(db: AppDatabase, projectId: string) {
@@ -102,20 +248,6 @@ export function recoverInterruptedAssets(db: AppDatabase): number {
     })
     .where(inArray(assets.status, ["receiving", "uploading", "recording"]))
     .run().changes;
-}
-
-export function upsertConnection(db: AppDatabase, value: typeof feishuConnections.$inferInsert): void {
-  db.insert(feishuConnections)
-    .values(value)
-    .onConflictDoUpdate({
-      target: feishuConnections.localUserId,
-      set: { ...value, updatedAt: sql`datetime('now')` },
-    })
-    .run();
-}
-
-export function getConnection(db: AppDatabase, localUserId: string) {
-  return db.select().from(feishuConnections).where(eq(feishuConnections.localUserId, localUserId)).get();
 }
 
 export function upsertVerification(

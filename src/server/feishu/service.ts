@@ -37,37 +37,48 @@ export class FeishuService {
   async createBase(name: string) {
     const baseData = await retryOperation(() =>
       this.client.json<{
-        base?: { app_token?: string; url?: string };
-        app?: { app_token?: string; url?: string };
+        base?: { base_token?: string; app_token?: string; url?: string };
+        app?: { base_token?: string; app_token?: string; url?: string };
+        base_token?: string;
         app_token?: string;
         url?: string;
       }>("/open-apis/base/v3/bases", { method: "POST", body: JSON.stringify({ name }) }),
     );
     const base = baseData.base ?? baseData.app ?? baseData;
-    const appToken = base.app_token;
-    if (!appToken) throw new Error("飞书创建 Base 成功，但响应缺少 app_token");
+    const appToken = base.base_token ?? base.app_token;
+    if (!appToken) throw new Error("飞书创建 Base 成功，但响应缺少 base_token/app_token");
     const url = base.url ?? `https://feishu.cn/base/${appToken}`;
     return { appToken, url };
   }
 
   async listTables(appToken: string) {
     const tableList = await retryOperation(() =>
-      this.client.json<{ items?: Array<{ table_id: string; name: string }> }>(
+      this.client.json<{
+        items?: Array<{ id?: string; table_id?: string; name: string }>;
+        tables?: Array<{ id?: string; table_id?: string; name: string }>;
+      }>(
         `/open-apis/base/v3/bases/${encodeURIComponent(appToken)}/tables`,
       ),
     );
-    return (tableList.items ?? []).map((table) => ({ tableId: table.table_id, name: table.name }));
+    return (tableList.tables ?? tableList.items ?? []).flatMap((table) => {
+      const tableId = table.id ?? table.table_id;
+      return tableId ? [{ tableId, name: table.name }] : [];
+    });
   }
 
   async createReviewTable(appToken: string) {
     const tableData = await retryOperation(() =>
-      this.client.json<{ table?: { table_id?: string }; table_id?: string }>(
+      this.client.json<{
+        table?: { id?: string; table_id?: string };
+        id?: string;
+        table_id?: string;
+      }>(
         `/open-apis/base/v3/bases/${encodeURIComponent(appToken)}/tables`,
         { method: "POST", body: JSON.stringify({ name: "审核素材", fields: REVIEW_FIELDS }) },
       ),
     );
-    const tableId = tableData.table?.table_id ?? tableData.table_id;
-    if (!tableId) throw new Error("飞书创建审核数据表成功，但响应缺少 table_id");
+    const tableId = tableData.table?.id ?? tableData.table?.table_id ?? tableData.id ?? tableData.table_id;
+    if (!tableId) throw new Error("飞书创建审核数据表成功，但响应缺少 id/table_id");
     return tableId;
   }
 
@@ -162,8 +173,8 @@ export class FeishuService {
         {
           method: "POST",
           body: JSON.stringify({
-            filter: { logic: "and", conditions: [["素材编号", "==", materialNumber]] },
-            select_fields: ["素材编号"],
+            keyword: materialNumber,
+            search_fields: ["素材编号"],
             limit: 2,
           }),
         },
@@ -180,35 +191,41 @@ export class FeishuService {
   }
 
   async verifyRecordAttachment(appToken: string, tableId: string, recordId: string, fileToken: string): Promise<boolean> {
-    const data = await retryOperation(() => this.client.json<{
-      record?: { fields?: Record<string, unknown> };
-      fields?: Record<string, unknown> | string[];
-      record_id_list?: string[];
-      data?: unknown[][];
-      records?: Array<{ data?: unknown[]; fields?: Record<string, unknown> }>;
-    }>(
-      `/open-apis/base/v3/bases/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/batch_get`,
-      {
-        method: "POST",
-        body: JSON.stringify({ record_id_list: [recordId], select_fields: ["素材"] }),
-      },
-    ));
-    const legacyFields = data.record?.fields
-      ?? data.records?.[0]?.fields
-      ?? (data.fields && !Array.isArray(data.fields) ? data.fields : undefined)
-      ?? {};
-    const rowAttachments = Array.isArray(data.data?.[0]?.[0])
-      ? data.data![0][0]
-      : Array.isArray(data.records?.[0]?.data?.[0])
-        ? data.records![0].data![0]
-        : undefined;
-    const attachments = rowAttachments ?? (Array.isArray(legacyFields["素材"]) ? legacyFields["素材"] : []);
-    return attachments.some(
-      (attachment) =>
-        typeof attachment === "object" &&
-        attachment !== null &&
-        "file_token" in attachment &&
-        attachment.file_token === fileToken,
-    );
+    return retryOperation(async () => {
+      const data = await this.client.json<{
+        record?: { fields?: Record<string, unknown> };
+        fields?: Record<string, unknown> | string[];
+        record_id_list?: string[];
+        data?: unknown[][];
+        records?: Array<{ data?: unknown[]; fields?: Record<string, unknown> }>;
+      }>(
+        `/open-apis/base/v3/bases/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/batch_get`,
+        {
+          method: "POST",
+          body: JSON.stringify({ record_id_list: [recordId], select_fields: ["素材"] }),
+        },
+      );
+      const legacyFields = data.record?.fields
+        ?? data.records?.[0]?.fields
+        ?? (data.fields && !Array.isArray(data.fields) ? data.fields : undefined)
+        ?? {};
+      const rowAttachments = Array.isArray(data.data?.[0]?.[0])
+        ? data.data![0][0]
+        : Array.isArray(data.records?.[0]?.data?.[0])
+          ? data.records![0].data![0]
+          : undefined;
+      const attachments = rowAttachments ?? (Array.isArray(legacyFields["素材"]) ? legacyFields["素材"] : []);
+      const verified = attachments.some(
+        (attachment) =>
+          typeof attachment === "object" &&
+          attachment !== null &&
+          "file_token" in attachment &&
+          attachment.file_token === fileToken,
+      );
+      if (!verified) {
+        throw Object.assign(new Error("附件字段尚未回读到对应 file_token"), { retryable: true });
+      }
+      return true;
+    });
   }
 }

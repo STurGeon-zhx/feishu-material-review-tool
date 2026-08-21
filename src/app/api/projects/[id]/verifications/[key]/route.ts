@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ok, fail } from "@/server/api-response";
 import { getAppContext } from "@/server/app-context";
-import { upsertVerification } from "@/server/db/repository";
+import { isActiveDestination, upsertVerification } from "@/server/db/repository";
 
 const schema = z.object({ status: z.enum(["pass", "fail"]), note: z.string().max(1000).optional() });
 
@@ -13,6 +13,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     }
     const input = schema.parse(await request.json());
     const { database } = getAppContext();
+    if (!isActiveDestination(database.db, id)) {
+      return fail(new Error("当前审核表不存在"), "DESTINATION_NOT_ACTIVE", 404);
+    }
     upsertVerification(database.db, {
       projectId: id,
       checkKey: key,

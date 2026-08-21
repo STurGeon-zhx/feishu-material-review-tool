@@ -2,9 +2,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ok, fail } from "@/server/api-response";
 import { getAppContext } from "@/server/app-context";
-import { getAsset, getProject, updateAsset, upsertVerification } from "@/server/db/repository";
+import { getAsset, getProject, isActiveDestination, updateAsset, upsertVerification } from "@/server/db/repository";
 import { FeishuHttpClient } from "@/server/feishu/http-client";
-import { FeishuUploader } from "@/server/feishu/uploader";
+import {
+  DriveAttachmentUploader,
+  requiresSpreadsheetReupload,
+} from "@/server/feishu/drive-attachment-uploader";
+import { toAssetDto } from "@/server/projects/destination-dto";
 import { receiveFile } from "@/server/uploads/receive-file";
 
 function uploadCheckKey(mimeType: string, size: number): string | undefined {
@@ -22,10 +26,14 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   const app = getAppContext();
   const asset = getAsset(app.database.db, assetId);
   const project = getProject(app.database.db, id);
-  if (!asset || asset.projectId !== id || !project) return fail(new Error("素材或项目不存在"), "ASSET_NOT_FOUND", 404);
-  if (asset.fileToken) return ok(asset);
-  if (!project.appToken || project.setupStatus !== "ready") {
-    return fail(new Error("项目尚未完成飞书审核表配置"), "PROJECT_NOT_READY", 409);
+  if (!asset || asset.projectId !== id || !project || !isActiveDestination(app.database.db, id)) {
+    return fail(new Error("素材或当前审核表不存在"), "ASSET_NOT_FOUND", 404);
+  }
+  if (asset.fileToken && !requiresSpreadsheetReupload(asset)) return ok(toAssetDto(asset));
+  const importable = project.setupStatus === "ready"
+    || (project.setupStatus === "partial" && project.setupStep === "share_permission_failed");
+  if (project.resourceType !== "sheet" || !project.spreadsheetToken || !importable) {
+    return fail(new Error("电子表格尚未完成配置"), "PROJECT_NOT_READY", 409);
   }
 
   let received: Awaited<ReturnType<typeof receiveFile>> | undefined;
@@ -37,11 +45,11 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
       declaredType: asset.mimeType,
     });
     updateAsset(app.database.db, assetId, { status: "uploading" });
-    const accessToken = await app.auth.getValidAccessToken(project.localUserId);
-    const fileToken = await new FeishuUploader(new FeishuHttpClient(accessToken)).upload(
+    const accessToken = await app.tokenProvider.getToken();
+    const fileToken = await new DriveAttachmentUploader(new FeishuHttpClient(accessToken)).upload(
       received.filePath,
       asset.fileName,
-      project.appToken,
+      project.spreadsheetToken,
     );
     const updated = updateAsset(app.database.db, assetId, {
       status: "uploaded",
@@ -56,11 +64,11 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
         checkKey,
         source: "automatic",
         status: "pass",
-        evidenceJson: JSON.stringify({ assetId, fileToken, size: asset.fileSize, mimeType: asset.mimeType }),
+        evidenceJson: JSON.stringify({ assetId, size: asset.fileSize, mimeType: asset.mimeType }),
         checkedAt: new Date().toISOString(),
       });
     }
-    return ok(updated);
+    return ok(toAssetDto(updated));
   } catch (error) {
     updateAsset(app.database.db, assetId, {
       status: "failed",

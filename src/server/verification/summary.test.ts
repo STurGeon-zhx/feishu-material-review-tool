@@ -13,6 +13,22 @@ describe("POC 总体验收状态", () => {
     expect(calculateOverallStatus(checks)).toBe("partial");
   });
 
+  it("企业策略禁止公开分享但其他项通过时为部分通过", () => {
+    const checks = passedChecks().map((check) =>
+      check.checkKey === "share_permission" ? { ...check, status: "fail" as const } : check,
+    );
+    expect(calculateOverallStatus(checks)).toBe("partial");
+  });
+
+  it("企业策略关闭分享导致匿名查看和编辑都失败时仍为部分通过", () => {
+    const checks = passedChecks().map((check) =>
+      new Set(["share_permission", "anonymous_view", "anonymous_edit"]).has(check.checkKey)
+        ? { ...check, status: "fail" as const }
+        : check,
+    );
+    expect(calculateOverallStatus(checks)).toBe("partial");
+  });
+
   it("匿名查看失败时整体失败", () => {
     const checks = passedChecks().map((check) =>
       check.checkKey === "anonymous_view" ? { ...check, status: "fail" as const } : check,
@@ -20,8 +36,15 @@ describe("POC 总体验收状态", () => {
     expect(calculateOverallStatus(checks)).toBe("fail");
   });
 
+  it("附件单元格回读失败时整体失败", () => {
+    const checks = passedChecks().map((check) =>
+      check.checkKey === "sheet_attachment_readback" ? { ...check, status: "fail" as const } : check,
+    );
+    expect(calculateOverallStatus(checks)).toBe("fail");
+  });
+
   it("缺少真实证据时保持待验证", () => {
-    expect(calculateOverallStatus([{ checkKey: "create_base", status: "pass" }])).toBe("pending");
+    expect(calculateOverallStatus([{ checkKey: "create_spreadsheet", status: "pass" }])).toBe("pending");
   });
 
   it("全部通过时整体通过", () => {

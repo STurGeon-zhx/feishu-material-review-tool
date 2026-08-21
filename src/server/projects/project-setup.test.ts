@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppDatabaseHandle } from "../db/client";
 import { createDatabase } from "../db/client";
-import { createOrGetProject, getProject } from "../db/repository";
+import { createOrGetProject, getProject, getProjectChecks } from "../db/repository";
 import { ProjectSetup, type FeishuResourceApi } from "./project-setup";
 
 const handles: AppDatabaseHandle[] = [];
@@ -18,7 +18,7 @@ describe("项目创建恢复", () => {
       name: "审核项目",
       requestedShareMode: "anyone_editable",
     });
-    let permissionFails = true;
+    let permissionFailure: Error | undefined = Object.assign(new Error("企业策略禁止公开编辑"), { code: "1063003" });
     let baseCreations = 0;
     let tableCreations = 0;
     const api: FeishuResourceApi = {
@@ -35,7 +35,7 @@ describe("项目创建恢复", () => {
       },
       async deleteTable() {},
       async setPublicPermission() {
-        if (permissionFails) throw Object.assign(new Error("企业策略禁止公开编辑"), { code: "1063003" });
+        if (permissionFailure) throw permissionFailure;
       },
       async getPublicPermission() {
         return "anyone_editable";
@@ -43,15 +43,32 @@ describe("项目创建恢复", () => {
     };
     const setup = new ProjectSetup(handle.db, async () => api);
 
-    await expect(setup.run("project-1")).rejects.toThrow("企业策略禁止公开编辑");
+    await expect(setup.run("project-1")).resolves.toMatchObject({ setupStatus: "partial" });
     expect(getProject(handle.db, "project-1")).toMatchObject({
       appToken: "app-token",
       tableId: "tbl-review",
       defaultTableDeleted: true,
       setupStatus: "partial",
+      setupStep: "share_permission_failed",
+      effectiveShareMode: "closed",
+    });
+    expect(getProjectChecks(handle.db, "project-1")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ checkKey: "create_base", status: "pass" }),
+      expect.objectContaining({ checkKey: "create_fields", status: "pass" }),
+      expect.objectContaining({ checkKey: "share_link", status: "pass" }),
+      expect.objectContaining({ checkKey: "share_permission", status: "fail" }),
+    ]));
+
+    permissionFailure = new Error("temporary network failure");
+    await expect(setup.run("project-1")).rejects.toThrow("temporary network failure");
+    expect(getProject(handle.db, "project-1")).toMatchObject({
+      setupStatus: "partial",
+      setupStep: "share_permission_failed",
+      appToken: "app-token",
+      tableId: "tbl-review",
     });
 
-    permissionFails = false;
+    permissionFailure = undefined;
     await setup.run("project-1");
 
     expect(getProject(handle.db, "project-1")).toMatchObject({
@@ -109,5 +126,28 @@ describe("项目创建恢复", () => {
       defaultTableDeleted: true,
       setupStatus: "ready",
     });
+  });
+
+  it("权限回读与请求不一致时按企业策略受限处理", async () => {
+    const handle = createDatabase(":memory:");
+    handles.push(handle);
+    createOrGetProject(handle.db, {
+      id: "project-policy-readback",
+      createKey: "create-key-policy-readback",
+      localUserId: "service_app",
+      name: "审核项目",
+      requestedShareMode: "anyone_editable",
+    });
+    const api: FeishuResourceApi = {
+      async createBase() { return { appToken: "app-token", url: "https://example.feishu.cn/base/app-token" }; },
+      async listTables() { return [{ tableId: "tbl-default", name: "数据表" }]; },
+      async createReviewTable() { return "tbl-review"; },
+      async deleteTable() {},
+      async setPublicPermission() {},
+      async getPublicPermission() { return "anyone_readable"; },
+    };
+
+    await expect(new ProjectSetup(handle.db, async () => api).run("project-policy-readback"))
+      .resolves.toMatchObject({ setupStatus: "partial", effectiveShareMode: "anyone_readable" });
   });
 });

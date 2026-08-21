@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { chunkRecords } from "../core/batching";
+import { SingleFlight } from "../core/single-flight";
 import type { AppDatabase } from "../db/client";
-import { getProject, upsertVerification } from "../db/repository";
+import { getProject, isActiveDestination, listRecoverableBatchIds, upsertVerification } from "../db/repository";
 import { assets } from "../db/schema";
 import type { ReviewRecordInput } from "../feishu/service";
 
@@ -12,14 +13,34 @@ export interface FeishuRecordApi {
 }
 
 export class BatchFinalizer {
+  private readonly flight = new SingleFlight<{ completed: number; failed: number }>();
+
   constructor(
     private readonly db: AppDatabase,
-    private readonly createApi: (localUserId: string) => Promise<FeishuRecordApi>,
+    private readonly createApi: () => Promise<FeishuRecordApi>,
   ) {}
 
   async run(projectId: string, batchId: string): Promise<{ completed: number; failed: number }> {
+    return this.flight.run(`${projectId}:${batchId}`, () => this.runOnce(projectId, batchId));
+  }
+
+  async resumeProject(projectId: string) {
+    const results: Array<{ batchId: string; completed: number; failed: number }> = [];
+    for (const batchId of listRecoverableBatchIds(this.db, projectId)) {
+      try {
+        results.push({ batchId, ...await this.run(projectId, batchId) });
+      } catch {
+        results.push({ batchId, completed: 0, failed: 1 });
+      }
+    }
+    return results;
+  }
+
+  private async runOnce(projectId: string, batchId: string): Promise<{ completed: number; failed: number }> {
     const project = getProject(this.db, projectId);
-    if (!project || !project.appToken || !project.tableId || project.setupStatus !== "ready") {
+    const importable = project?.setupStatus === "ready"
+      || (project?.setupStatus === "partial" && project.setupStep === "share_permission_failed");
+    if (!project || !isActiveDestination(this.db, projectId) || !project.appToken || !project.tableId || !importable) {
       throw new Error("项目尚未完成飞书审核表配置");
     }
     const rows = this.db
@@ -35,7 +56,7 @@ export class BatchFinalizer {
       )
       .all();
     if (rows.length === 0) return { completed: 0, failed: 0 };
-    const api = await this.createApi(project.localUserId);
+    const api = await this.createApi();
     let completed = 0;
     let failed = 0;
 

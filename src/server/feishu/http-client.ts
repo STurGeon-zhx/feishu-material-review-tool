@@ -1,21 +1,5 @@
 const FEISHU_ORIGIN = "https://open.feishu.cn";
 
-export const FEISHU_USER_SCOPES = [
-  "bitable:bitable",
-  "drive:drive",
-  "docs:permission.setting:read",
-  "docs:permission.setting:write_only",
-] as const;
-
-export function buildAuthorizeUrl(input: { appId: string; redirectUri: string; state: string }): string {
-  const url = new URL("https://accounts.feishu.cn/open-apis/authen/v1/authorize");
-  url.searchParams.set("app_id", input.appId);
-  url.searchParams.set("redirect_uri", input.redirectUri);
-  url.searchParams.set("scope", FEISHU_USER_SCOPES.join(" "));
-  url.searchParams.set("state", input.state);
-  return url.toString();
-}
-
 export class FeishuApiError extends Error {
   readonly code: string;
   readonly retryable: boolean;

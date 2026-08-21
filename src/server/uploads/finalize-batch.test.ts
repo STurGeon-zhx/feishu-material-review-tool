@@ -16,9 +16,10 @@ describe("批次记录写入", () => {
     createOrGetProject(handle.db, {
       id: "project-1",
       createKey: "create-key",
-      localUserId: "demo_user",
+      localUserId: "service_app",
       name: "审核项目",
       requestedShareMode: "anyone_readable",
+      resourceType: "sheet",
     });
     updateProject(handle.db, "project-1", {
       appToken: "app-token",
@@ -65,9 +66,10 @@ describe("批次记录写入", () => {
     createOrGetProject(handle.db, {
       id: "project-2",
       createKey: "create-key-2",
-      localUserId: "demo_user",
+      localUserId: "service_app",
       name: "审核项目",
       requestedShareMode: "anyone_readable",
+      resourceType: "sheet",
     });
     updateProject(handle.db, "project-2", {
       appToken: "app-token",
@@ -110,5 +112,102 @@ describe("批次记录写入", () => {
       status: "failed",
       recordId: null,
     });
+  });
+
+  it("仅因公开分享策略受限的 PARTIAL 表仍可写入记录", async () => {
+    const handle = createDatabase(":memory:");
+    handles.push(handle);
+    createOrGetProject(handle.db, {
+      id: "project-partial",
+      createKey: "create-key-partial",
+      localUserId: "service_app",
+      name: "审核项目",
+      requestedShareMode: "anyone_editable",
+      resourceType: "sheet",
+    });
+    updateProject(handle.db, "project-partial", {
+      appToken: "app-token",
+      tableId: "tbl-review",
+      setupStatus: "partial",
+      setupStep: "share_permission_failed",
+    });
+    registerBatch(handle.db, "project-partial", "batch-partial", [
+      { id: "asset-partial", name: "one.mp4", type: "video/mp4", size: 100 },
+    ]);
+    handle.db
+      .update(assets)
+      .set({ status: "uploaded", fileToken: "file-token" })
+      .where(eq(assets.id, "asset-partial"))
+      .run();
+    const api: FeishuRecordApi = {
+      async batchCreateRecords() { return ["record-created"]; },
+      async searchRecordIds() { return new Map(); },
+      async verifyRecordAttachment() { return true; },
+    };
+
+    await expect(new BatchFinalizer(handle.db, async () => api).run("project-partial", "batch-partial"))
+      .resolves.toEqual({ completed: 1, failed: 0 });
+  });
+
+  it("并发完成同一批次时只向飞书新增一次记录", async () => {
+    const handle = createDatabase(":memory:");
+    handles.push(handle);
+    createOrGetProject(handle.db, {
+      id: "project-concurrent", createKey: "create-key-concurrent", localUserId: "service_app",
+      name: "审核项目", requestedShareMode: "anyone_editable", resourceType: "sheet",
+    });
+    updateProject(handle.db, "project-concurrent", {
+      appToken: "app-token", tableId: "tbl-review", setupStatus: "ready",
+    });
+    registerBatch(handle.db, "project-concurrent", "batch-concurrent", [
+      { id: "asset-concurrent", name: "one.jpg", type: "image/jpeg", size: 100 },
+    ]);
+    handle.db.update(assets).set({ status: "uploaded", fileToken: "file-token" })
+      .where(eq(assets.id, "asset-concurrent")).run();
+    let createCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const api: FeishuRecordApi = {
+      async batchCreateRecords() { createCalls += 1; await gate; return ["record-created"]; },
+      async searchRecordIds() { return new Map(); },
+      async verifyRecordAttachment() { return true; },
+    };
+    const finalizer = new BatchFinalizer(handle.db, async () => api);
+
+    const first = finalizer.run("project-concurrent", "batch-concurrent");
+    const second = finalizer.run("project-concurrent", "batch-concurrent");
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { completed: 1, failed: 0 }, { completed: 1, failed: 0 },
+    ]);
+    expect(createCalls).toBe(1);
+  });
+
+  it("应用重启后自动续写所有已有 file_token 的批次", async () => {
+    const handle = createDatabase(":memory:");
+    handles.push(handle);
+    createOrGetProject(handle.db, {
+      id: "project-recovery", createKey: "ensure:recovery", localUserId: "service_app",
+      name: "审核项目", requestedShareMode: "anyone_editable", resourceType: "sheet",
+    });
+    updateProject(handle.db, "project-recovery", {
+      appToken: "app-token", tableId: "tbl-review", setupStatus: "ready",
+    });
+    registerBatch(handle.db, "project-recovery", "batch-recovery", [
+      { id: "asset-recovery", name: "one.mp4", type: "video/mp4", size: 100 },
+    ]);
+    handle.db.update(assets).set({ status: "failed", fileToken: "file-token", errorCode: "UPLOAD_INTERRUPTED" })
+      .where(eq(assets.id, "asset-recovery")).run();
+    const api: FeishuRecordApi = {
+      async batchCreateRecords() { return ["record-recovered"]; },
+      async searchRecordIds() { return new Map(); },
+      async verifyRecordAttachment() { return true; },
+    };
+
+    const results = await new BatchFinalizer(handle.db, async () => api).resumeProject("project-recovery");
+
+    expect(results).toEqual([{ batchId: "batch-recovery", completed: 1, failed: 0 }]);
+    expect(handle.db.select().from(assets).where(eq(assets.id, "asset-recovery")).get())
+      .toMatchObject({ status: "completed", recordId: "record-recovered" });
   });
 });

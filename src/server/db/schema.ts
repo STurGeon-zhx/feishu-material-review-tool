@@ -3,18 +3,7 @@ import { integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm
 
 const timestamp = (name: string) => text(name).notNull().default(sql`(datetime('now'))`);
 
-export const feishuConnections = sqliteTable("feishu_connections", {
-  localUserId: text("local_user_id").primaryKey(),
-  feishuOpenId: text("feishu_open_id").notNull(),
-  feishuName: text("feishu_name"),
-  accessTokenCiphertext: text("access_token_ciphertext").notNull(),
-  refreshTokenCiphertext: text("refresh_token_ciphertext").notNull(),
-  accessExpiresAt: integer("access_expires_at").notNull(),
-  refreshExpiresAt: integer("refresh_expires_at"),
-  scopes: text("scopes").notNull().default(""),
-  createdAt: timestamp("created_at"),
-  updatedAt: timestamp("updated_at"),
-});
+export type ResourceType = "base" | "sheet";
 
 export const projects = sqliteTable(
   "projects",
@@ -23,6 +12,7 @@ export const projects = sqliteTable(
     createKey: text("create_key").notNull(),
     localUserId: text("local_user_id").notNull(),
     name: text().notNull(),
+    resourceType: text("resource_type", { enum: ["base", "sheet"] }).notNull().default("base"),
     requestedShareMode: text("requested_share_mode", { enum: ["anyone_readable", "anyone_editable"] }).notNull(),
     effectiveShareMode: text("effective_share_mode"),
     appToken: text("app_token"),
@@ -30,6 +20,8 @@ export const projects = sqliteTable(
     feishuUrl: text("feishu_url"),
     defaultTableId: text("default_table_id"),
     defaultTableDeleted: integer("default_table_deleted", { mode: "boolean" }).notNull().default(false),
+    spreadsheetToken: text("spreadsheet_token"),
+    spreadsheetUrl: text("spreadsheet_url"),
     setupStatus: text("setup_status", { enum: ["draft", "creating", "ready", "partial", "failed"] })
       .notNull()
       .default("draft"),
@@ -56,6 +48,8 @@ export const assets = sqliteTable(
     fileSize: integer("file_size").notNull(),
     fileToken: text("file_token"),
     recordId: text("record_id"),
+    sheetId: text("sheet_id"),
+    sheetRowNumber: integer("sheet_row_number"),
     status: text({ enum: ["queued", "receiving", "uploading", "uploaded", "recording", "completed", "failed"] })
       .notNull()
       .default("queued"),
@@ -69,6 +63,23 @@ export const assets = sqliteTable(
     uniqueIndex("assets_project_material_unique").on(table.projectId, table.materialNumber),
     uniqueIndex("assets_project_batch_asset_unique").on(table.projectId, table.batchId, table.id),
   ],
+);
+
+export const sheetTabs = sqliteTable(
+  "sheet_tabs",
+  {
+    id: text().primaryKey(),
+    projectId: text("project_id").notNull(),
+    localDate: text("local_date").notNull(),
+    sheetId: text("sheet_id").notNull(),
+    sheetName: text("sheet_name").notNull(),
+    nextRow: integer("next_row").notNull().default(2),
+    setupStatus: text("setup_status", { enum: ["creating", "ready", "failed"] }).notNull().default("creating"),
+    setupError: text("setup_error"),
+    createdAt: timestamp("created_at"),
+    updatedAt: timestamp("updated_at"),
+  },
+  (table) => [uniqueIndex("sheet_tabs_project_date_unique").on(table.projectId, table.localDate)],
 );
 
 export const verificationChecks = sqliteTable(
@@ -86,4 +97,10 @@ export const verificationChecks = sqliteTable(
   (table) => [primaryKey({ columns: [table.projectId, table.checkKey] })],
 );
 
-export const schema = { feishuConnections, projects, assets, verificationChecks };
+export const destinationLocks = sqliteTable("destination_locks", {
+  projectId: text("project_id").primaryKey(),
+  kind: text().notNull(),
+  createdAt: timestamp("created_at"),
+});
+
+export const schema = { projects, assets, sheetTabs, verificationChecks, destinationLocks };

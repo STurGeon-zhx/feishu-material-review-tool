@@ -1,28 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { FeishuApiError, FeishuHttpClient, buildAuthorizeUrl } from "./http-client";
+import { FeishuApiError, FeishuHttpClient } from "./http-client";
 
 describe("飞书 HTTP 客户端", () => {
-  it("授权链接包含回调地址、state 和最小权限", () => {
-    const url = new URL(
-      buildAuthorizeUrl({
-        appId: "cli_demo",
-        redirectUri: "http://localhost:3000/api/feishu/callback",
-        state: "secure-state",
-      }),
-    );
-
-    expect(url.origin + url.pathname).toBe("https://accounts.feishu.cn/open-apis/authen/v1/authorize");
-    expect(url.searchParams.get("app_id")).toBe("cli_demo");
-    expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3000/api/feishu/callback");
-    expect(url.searchParams.get("state")).toBe("secure-state");
-    expect(url.searchParams.get("scope")?.split(" ")).toEqual([
-      "bitable:bitable",
-      "drive:drive",
-      "docs:permission.setting:read",
-      "docs:permission.setting:write_only",
-    ]);
-  });
-
   it("企业策略拒绝被映射为不可重试错误并保留请求 ID", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ code: 1063003, msg: "Invalid operation" }), {
