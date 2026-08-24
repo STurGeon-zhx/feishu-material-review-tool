@@ -20,9 +20,18 @@ export interface SheetAttachmentSegment {
   mime_type: string;
 }
 
+export interface SheetEmbedImageSegment {
+  type: "embed-image";
+  text: string;
+  image_name: string;
+  image_token: string;
+  image_width: number;
+  image_height: number;
+}
+
 export interface SheetCell {
   value?: string | number | boolean;
-  rich_text?: SheetAttachmentSegment[];
+  rich_text?: Array<SheetAttachmentSegment | SheetEmbedImageSegment>;
   cell_styles?: Record<string, string | number>;
   data_validation?: {
     type: "list";

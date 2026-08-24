@@ -16,16 +16,10 @@ export const REVIEW_HEADERS = [
   "素材",
   "审核",
   "客户意见",
-  "素材编号",
-  "批次",
-  "素材UUID",
-  "类型",
-  "文件Token",
-  "上传时间",
 ] as const;
 
 const REVIEW_SHEET_ROWS = 200;
-const REVIEW_SHEET_COLUMNS = REVIEW_HEADERS.length;
+const REVIEW_SHEET_COLUMNS = 26;
 
 interface DailySheetApi {
   getWorkbookInfo(spreadsheetToken: string): Promise<{ sheets: WorkbookSheet[] }>;
@@ -49,7 +43,6 @@ interface DailySheetApi {
     operations: ResizeOperation[],
   ): Promise<void>;
   freezeRows(spreadsheetToken: string, sheetId: string, count: number): Promise<void>;
-  hideColumns(spreadsheetToken: string, sheetId: string, range: string): Promise<void>;
   getSheetStructure(spreadsheetToken: string, sheetId: string): Promise<Record<string, unknown>>;
 }
 
@@ -86,12 +79,6 @@ function hasNumericProperty(value: unknown, keys: Set<string>, expected: number)
   return false;
 }
 
-function hasHiddenReviewColumns(value: unknown): boolean {
-  const serialized = JSON.stringify(value);
-  if (serialized.includes("D:I")) return true;
-  return hasNumericProperty(value, new Set(["hidden_column_count", "hidden_columns_count"]), 6);
-}
-
 function headerCells(): SheetCell[][] {
   return [[...REVIEW_HEADERS].map((value) => ({
     value,
@@ -111,9 +98,6 @@ function assertLayout(headers: CellRangeRead, structure: Record<string, unknown>
   }
   if (!hasNumericProperty(structure, new Set(["frozen_rows", "freeze_rows", "frozenRows"]), 1)) {
     throw new Error("审核工作表首行冻结未生效");
-  }
-  if (!hasHiddenReviewColumns(structure)) {
-    throw new Error("审核工作表辅助列隐藏未生效");
   }
 }
 
@@ -195,18 +179,15 @@ export class DailySheetManager {
   }
 
   private async configure(spreadsheetToken: string, sheetId: string): Promise<void> {
-    await this.api.setCellRange(spreadsheetToken, sheetId, "A1:I1", headerCells());
+    await this.api.setCellRange(spreadsheetToken, sheetId, "A1:C1", headerCells());
     await this.api.resizeRanges(spreadsheetToken, sheetId, [
-      { range: "A:A", width: 400 },
-      { range: "B:B", width: 120 },
+      { range: "A:B", width: 160 },
       { range: "C:C", width: 320 },
-      { range: "D:I", width: 100 },
       { range: "1:1", height: 32 },
     ]);
     await this.api.freezeRows(spreadsheetToken, sheetId, 1);
-    await this.api.hideColumns(spreadsheetToken, sheetId, "D:I");
     const [headers, structure] = await Promise.all([
-      this.api.getCellRange(spreadsheetToken, sheetId, "A1:I1"),
+      this.api.getCellRange(spreadsheetToken, sheetId, "A1:C1"),
       this.api.getSheetStructure(spreadsheetToken, sheetId),
     ]);
     assertLayout(headers, structure);

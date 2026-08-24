@@ -14,7 +14,7 @@ import {
   upsertVerification,
 } from "../db/repository";
 import { assets } from "../db/schema";
-import type { CellRangeRead, SheetCell, WorkbookSheet } from "../feishu/sheets-service";
+import type { CellRangeRead, ResizeOperation, SheetCell, WorkbookSheet } from "../feishu/sheets-service";
 
 export interface SheetWriteApi {
   getWorkbookInfo(spreadsheetToken: string): Promise<{ sheets: WorkbookSheet[] }>;
@@ -35,6 +35,11 @@ export interface SheetWriteApi {
     range: string,
     cells: SheetCell[][],
   ): Promise<void>;
+  resizeRanges(
+    spreadsheetToken: string,
+    sheetId: string,
+    operations: ResizeOperation[],
+  ): Promise<void>;
 }
 
 interface TaskSheetTarget {
@@ -50,7 +55,6 @@ interface LegacyDailySheetProvider {
 
 interface RemoteAssetRow {
   rowNumber: number;
-  fileToken?: string;
 }
 
 const WRITE_CHUNK_SIZE = 50;
@@ -60,35 +64,31 @@ function parseSqliteDate(value: string): Date {
   return new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
 }
 
-function formatShanghaiTimestamp(value: string): string {
-  const date = parseSqliteDate(value);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}.${String(date.getUTCMilliseconds()).padStart(3, "0")}+08:00`;
-}
-
 function cellText(cell: SheetCell | undefined): string | undefined {
   const value = cell?.value;
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
-function attachmentToken(cell: SheetCell | undefined): string | undefined {
-  return cell?.rich_text?.find((segment) => segment.type === "attachment")?.attachment_token;
+function mediaToken(cell: SheetCell | undefined): string | undefined {
+  const segment = cell?.rich_text?.find((item) => item.type === "attachment" || item.type === "embed-image");
+  if (segment?.type === "attachment") return segment.attachment_token;
+  return segment?.image_token;
 }
 
 function assetCells(asset: typeof assets.$inferSelect): SheetCell[] {
   const fileToken = asset.fileToken!;
-  return [
-    {
+  const mediaCell: SheetCell = asset.mimeType.startsWith("image/")
+    ? {
+      rich_text: [{
+        type: "embed-image",
+        text: asset.fileName,
+        image_name: asset.fileName,
+        image_token: fileToken,
+        image_width: 144,
+        image_height: 96,
+      }],
+    }
+    : {
       rich_text: [{
         type: "attachment",
         text: asset.fileName,
@@ -97,7 +97,9 @@ function assetCells(asset: typeof assets.$inferSelect): SheetCell[] {
         file_size: asset.fileSize,
         mime_type: asset.mimeType,
       }],
-    },
+    };
+  return [
+    mediaCell,
     {
       value: "待审核",
       data_validation: {
@@ -108,12 +110,6 @@ function assetCells(asset: typeof assets.$inferSelect): SheetCell[] {
       },
     },
     { value: "" },
-    { value: asset.materialNumber },
-    { value: `第 ${asset.batchNumber} 批` },
-    { value: asset.id },
-    { value: asset.mimeType.startsWith("image/") ? "图片" : "视频" },
-    { value: fileToken },
-    { value: formatShanghaiTimestamp(asset.createdAt) },
   ];
 }
 
@@ -208,14 +204,15 @@ export class SheetBatchFinalizer {
   ): Promise<{ completed: number; failed: number }> {
     const token = project.spreadsheetToken!;
     const sheetId = taskSheet.sheetId;
-    const initialRead = await api.getCellRange(token, sheetId, "F2:H50000");
+    await api.resizeRanges(token, sheetId, [{ range: "A:B", width: 160 }]);
+    const initialRead = await api.getCellRange(token, sheetId, "A2:A50000");
     let remoteIndex = this.remoteIndex(initialRead);
     let completed = 0;
     let failed = 0;
     const missing: Array<typeof assets.$inferSelect> = [];
 
     for (const asset of pendingAssets) {
-      const remote = remoteIndex.get(asset.id);
+      const remote = remoteIndex.get(asset.fileToken!);
       if (!remote) {
         missing.push(asset);
         continue;
@@ -224,7 +221,7 @@ export class SheetBatchFinalizer {
         this.completeAsset(asset.id, sheetId, remote.rowNumber);
         completed += 1;
       } else {
-        this.failAsset(asset.id, "ATTACHMENT_VERIFY_FAILED", "UUID 已存在，但附件 token 回读不一致");
+        this.failAsset(asset.id, "ATTACHMENT_VERIFY_FAILED", "素材已存在，但附件 token 回读不一致");
         failed += 1;
       }
     }
@@ -251,17 +248,21 @@ export class SheetBatchFinalizer {
         const lastRow = chunk.at(-1)!.rowNumber;
         let writeError: unknown;
         try {
+          const imageRows = chunk
+            .filter(({ asset }) => asset.mimeType.startsWith("image/"))
+            .map(({ rowNumber }) => ({ range: `${rowNumber}:${rowNumber}`, height: 104 }));
+          if (imageRows.length > 0) await api.resizeRanges(token, sheetId, imageRows);
           await api.setCellRange(
             token,
             sheetId,
-            `A${firstRow}:I${lastRow}`,
+            `A${firstRow}:C${lastRow}`,
             chunk.map(({ asset }) => assetCells(asset)),
           );
         } catch (error) {
           writeError = error;
         }
 
-        const readback = await api.getCellRange(token, sheetId, `A${firstRow}:I${lastRow}`);
+        const readback = await api.getCellRange(token, sheetId, `A${firstRow}:C${lastRow}`);
         for (const assignment of chunk) {
           const offset = assignment.rowNumber - firstRow;
           const row = readback.cells[offset];
@@ -278,7 +279,7 @@ export class SheetBatchFinalizer {
           }
         }
       }
-      remoteIndex = this.remoteIndex(await api.getCellRange(token, sheetId, "F2:H50000"));
+      remoteIndex = this.remoteIndex(await api.getCellRange(token, sheetId, "A2:A50000"));
       const actualLastRow = Math.max(1, ...[...remoteIndex.values()].map((row) => row.rowNumber));
       if (getTaskSheet(this.db, taskSheet.id)) {
         updateTaskSheet(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
@@ -294,8 +295,8 @@ export class SheetBatchFinalizer {
   private remoteIndex(read: CellRangeRead): Map<string, RemoteAssetRow> {
     const index = new Map<string, RemoteAssetRow>();
     read.cells.forEach((row, offset) => {
-      const uuid = cellText(row[0]);
-      if (uuid) index.set(uuid, { rowNumber: offset + 2, fileToken: cellText(row[2]) });
+      const fileToken = mediaToken(row[0]);
+      if (fileToken) index.set(fileToken, { rowNumber: offset + 2 });
     });
     return index;
   }
@@ -307,16 +308,14 @@ export class SheetBatchFinalizer {
     rowNumber: number,
     expectedFileToken: string,
   ): Promise<boolean> {
-    const readback = await api.getCellRange(token, sheetId, `A${rowNumber}:I${rowNumber}`);
+    const readback = await api.getCellRange(token, sheetId, `A${rowNumber}:C${rowNumber}`);
     const row = readback.cells[0];
-    return attachmentToken(row?.[0]) === expectedFileToken && cellText(row?.[7]) === expectedFileToken;
+    return mediaToken(row?.[0]) === expectedFileToken;
   }
 
   private rowMatches(row: SheetCell[] | undefined, asset: typeof assets.$inferSelect): boolean {
-    return attachmentToken(row?.[0]) === asset.fileToken
-      && cellText(row?.[1]) === "待审核"
-      && cellText(row?.[5]) === asset.id
-      && cellText(row?.[7]) === asset.fileToken;
+    return mediaToken(row?.[0]) === asset.fileToken
+      && cellText(row?.[1]) === "待审核";
   }
 
   private async ensureCapacity(

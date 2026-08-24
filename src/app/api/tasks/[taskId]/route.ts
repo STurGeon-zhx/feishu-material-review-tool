@@ -26,3 +26,13 @@ export async function GET(_request: Request, context: { params: Promise<{ taskId
     return fail(error, "GET_TASK_FAILED");
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ taskId: string }> }) {
+  try {
+    const { taskId } = await context.params;
+    return ok(getAppContext().tasks.delete(taskId));
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+    return fail(error, "DELETE_TASK_FAILED", code === "TASK_NOT_FOUND" ? 404 : 400);
+  }
+}

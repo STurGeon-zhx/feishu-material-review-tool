@@ -15,20 +15,19 @@ function seedTask() {
 function api(overrides: Partial<TaskSheetApi> = {}): TaskSheetApi {
   return {
     getWorkbookInfo: vi.fn(async () => ({ sheets: [] })),
-    createSheet: vi.fn(async (_token, title) => ({ sheetId: "remote-sheet", title, rowCount: 200, columnCount: 9 })),
+    createSheet: vi.fn(async (_token, title) => ({ sheetId: "remote-sheet", title, rowCount: 200, columnCount: 26 })),
     renameSheet: vi.fn(async () => undefined),
     setCellRange: vi.fn(async () => undefined),
     getCellRange: vi.fn(async () => ({ cells: [[...REVIEW_HEADERS].map((value) => ({ value }))] })),
     resizeRanges: vi.fn(async () => undefined),
     freezeRows: vi.fn(async () => undefined),
-    hideColumns: vi.fn(async () => undefined),
-    getSheetStructure: vi.fn(async () => ({ frozen_rows: 1, hidden_columns_count: 6 })),
+    getSheetStructure: vi.fn(async () => ({ frozen_rows: 1 })),
     ...overrides,
   };
 }
 
 describe("TaskSheetManager", () => {
-  it("创建命名工作表并完成表头、列宽、冻结、隐藏和回读验证", async () => {
+  it("创建仅含审核字段的命名工作表并完成列宽、冻结和回读验证", async () => {
     const handle = seedTask();
     const remote = api();
     const manager = new TaskSheetManager(handle.db, async () => remote, () => "task-sheet-1");
@@ -37,9 +36,14 @@ describe("TaskSheetManager", () => {
       createKey: "custom:key-1", name: "0827素材审核",
     });
     expect(sheet).toMatchObject({ name: "0827素材审核", sheetId: "remote-sheet", setupStatus: "ready", nextRow: 2 });
-    expect(remote.setCellRange).toHaveBeenCalledWith("spreadsheet-1", "remote-sheet", "A1:I1", expect.any(Array));
+    expect(remote.createSheet).toHaveBeenCalledWith("spreadsheet-1", "0827素材审核", 200, 26);
+    expect(remote.setCellRange).toHaveBeenCalledWith("spreadsheet-1", "remote-sheet", "A1:C1", expect.any(Array));
+    expect(remote.resizeRanges).toHaveBeenCalledWith("spreadsheet-1", "remote-sheet", [
+      { range: "A:B", width: 160 },
+      { range: "C:C", width: 320 },
+      { range: "1:1", height: 32 },
+    ]);
     expect(remote.freezeRows).toHaveBeenCalledWith("spreadsheet-1", "remote-sheet", 1);
-    expect(remote.hideColumns).toHaveBeenCalledWith("spreadsheet-1", "remote-sheet", "D:I");
     handle.close();
   });
 
@@ -47,7 +51,7 @@ describe("TaskSheetManager", () => {
     const handle = seedTask();
     const structure = vi.fn()
       .mockRejectedValueOnce(new Error("回读暂时失败"))
-      .mockResolvedValue({ frozen_rows: 1, hidden_columns_count: 6 });
+      .mockResolvedValue({ frozen_rows: 1 });
     const remote = api({ getSheetStructure: structure });
     const manager = new TaskSheetManager(handle.db, async () => remote, () => "task-sheet-1");
     const input = {

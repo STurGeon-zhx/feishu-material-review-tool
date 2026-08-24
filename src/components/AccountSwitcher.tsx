@@ -11,9 +11,10 @@ interface Props {
   onActivate(id: string): Promise<void>;
   onCreate(input: { name: string; appId: string; appSecret: string }): Promise<void>;
   onUpdate(id: string, input: { name?: string; appSecret?: string }): Promise<void>;
+  onDelete(id: string): Promise<void>;
 }
 
-export function AccountSwitcher({ accounts, activeAccountId, disabled, onActivate, onCreate, onUpdate }: Props) {
+export function AccountSwitcher({ accounts, activeAccountId, disabled, onActivate, onCreate, onUpdate, onDelete }: Props) {
   const [showCreate, setShowCreate] = useState(accounts.length === 0);
   const [showEdit, setShowEdit] = useState(false);
   const [name, setName] = useState("");
@@ -54,6 +55,11 @@ export function AccountSwitcher({ accounts, activeAccountId, disabled, onActivat
     <div className={styles.compactActions}>
       <button className={styles.secondary} disabled={disabled} onClick={() => { setShowCreate((value) => !value); setShowEdit(false); }}>添加账号</button>
       {active && <button className={styles.secondary} disabled={disabled} onClick={() => { setShowEdit((value) => !value); setShowCreate(false); }}>更新凭证</button>}
+      {active && <button className={styles.dangerButton} disabled={disabled} onClick={() => {
+        if (window.confirm(`确认删除账号记录「${active.name}」吗？\n\n该账号下的本地任务和素材记录会一起删除，飞书中的电子表格不会删除。`)) {
+          void onDelete(active.id).catch(() => undefined);
+        }
+      }}>删除账号记录</button>}
     </div>
     {(showCreate || showEdit) && <div className={styles.credentialForm}>
       <label>账号名称<input value={name} maxLength={50} placeholder={showEdit ? active?.name : "例如：客户 A 飞书"} onChange={(event) => setName(event.target.value)} /></label>

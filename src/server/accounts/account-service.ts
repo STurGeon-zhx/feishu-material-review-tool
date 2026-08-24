@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { AppDatabase } from "../db/client";
-import { appState, assets, feishuAccounts, projects, sheetTabs, taskSheets } from "../db/schema";
+import {
+  appState,
+  assets,
+  destinationLocks,
+  feishuAccounts,
+  projects,
+  sheetTabs,
+  taskSheets,
+  verificationChecks,
+} from "../db/schema";
 import { CredentialCipher } from "../security/credential-cipher";
 
 const STATE_ID = "local";
@@ -128,6 +137,35 @@ export class AccountService {
       .where(eq(feishuAccounts.id, accountId))
       .run();
   }
+
+  delete(accountId: string) {
+    const account = this.get(accountId);
+    if (!account) throw conflict("飞书账号不存在", "ACCOUNT_NOT_FOUND");
+    const taskIds = this.db.select({ id: projects.id }).from(projects)
+      .where(eq(projects.accountId, accountId)).all().map((task) => task.id);
+    let activeAccountId: string | null = null;
+    this.db.transaction((tx) => {
+      if (taskIds.length > 0) {
+        tx.delete(destinationLocks).where(inArray(destinationLocks.projectId, taskIds)).run();
+        tx.delete(verificationChecks).where(inArray(verificationChecks.projectId, taskIds)).run();
+        tx.delete(assets).where(inArray(assets.projectId, taskIds)).run();
+        tx.delete(taskSheets).where(inArray(taskSheets.taskId, taskIds)).run();
+        tx.delete(sheetTabs).where(inArray(sheetTabs.projectId, taskIds)).run();
+        tx.delete(projects).where(inArray(projects.id, taskIds)).run();
+      }
+      tx.delete(feishuAccounts).where(eq(feishuAccounts.id, accountId)).run();
+      const state = tx.select().from(appState).where(eq(appState.id, STATE_ID)).get();
+      if (state?.activeAccountId === accountId) {
+        activeAccountId = tx.select({ id: feishuAccounts.id }).from(feishuAccounts)
+          .orderBy(desc(feishuAccounts.createdAt)).get()?.id ?? null;
+        tx.update(appState).set({ activeAccountId, updatedAt: sql`datetime('now')` })
+          .where(eq(appState.id, STATE_ID)).run();
+      } else {
+        activeAccountId = state?.activeAccountId ?? null;
+      }
+    });
+    return { deletedAccountId: accountId, activeAccountId, deletedTaskCount: taskIds.length };
+  }
 }
 
 export function bootstrapLegacyWorkspace(
@@ -137,8 +175,9 @@ export function bootstrapLegacyWorkspace(
   createId: () => string = randomUUID,
 ): void {
   db.transaction((tx) => {
+    const existingState = tx.select().from(appState).where(eq(appState.id, STATE_ID)).get();
     let account = tx.select().from(feishuAccounts).orderBy(feishuAccounts.createdAt).get();
-    if (!account && environment.FEISHU_APP_ID && environment.FEISHU_APP_SECRET) {
+    if (!account && !existingState && environment.FEISHU_APP_ID && environment.FEISHU_APP_SECRET) {
       const id = createId();
       tx.insert(feishuAccounts).values({
         id,

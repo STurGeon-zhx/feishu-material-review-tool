@@ -5,13 +5,28 @@ import { AccountSwitcher } from "./AccountSwitcher";
 import { SheetSelector } from "./SheetSelector";
 import { TaskSidebar } from "./TaskSidebar";
 import { UploadPanel } from "./UploadPanel";
-import { VerificationPanel } from "./VerificationPanel";
 import { jsonRequest, reviewApi } from "./review-api";
 import type { AccountSummary, SelectedFile, TaskDetail, TaskSummary } from "./review-workspace-types";
 import styles from "./ReviewDemo.module.css";
 
 export function filesForNewBatch<T extends { status: string }>(files: T[]): T[] {
   return files.filter((file) => file.status === "queued");
+}
+
+export function filesAfterSelection(
+  current: SelectedFile[],
+  incoming: File[],
+  createId: () => string = () => crypto.randomUUID(),
+): SelectedFile[] {
+  if (incoming.length === 0) return current;
+  const previousBatchCompleted = current.length > 0 && current.every((file) => file.status === "completed");
+  const selected = incoming.map((file) => ({
+    id: createId(),
+    file,
+    status: "queued" as const,
+    progress: 0,
+  }));
+  return previousBatchCompleted ? selected : [...current, ...selected];
 }
 
 function uploadContent(taskId: string, item: SelectedFile, onProgress: (progress: number) => void): Promise<void> {
@@ -80,7 +95,6 @@ export function ReviewDemo() {
   }, [loadWorkspace]);
 
   const activeSheet = useMemo(() => detail?.sheets.find((sheet) => sheet.id === detail.task.activeTaskSheetId) ?? null, [detail]);
-  const sheetNames = useMemo(() => new Map(detail?.sheets.map((sheet) => [sheet.id, sheet.name]) ?? []), [detail]);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -99,6 +113,15 @@ export function ReviewDemo() {
     await run(async () => {
       await reviewApi(`/api/accounts/${id}`, jsonRequest("PATCH", input));
       setMessage("账号凭证已验证并更新"); await loadWorkspace();
+    });
+  }
+
+  async function deleteAccount(id: string) {
+    await run(async () => {
+      await reviewApi(`/api/accounts/${id}`, { method: "DELETE" });
+      setFiles([]); setDetail(null); setActiveTaskId(null);
+      setMessage("账号及其本地任务记录已删除，飞书文档已保留");
+      await loadWorkspace();
     });
   }
 
@@ -128,6 +151,15 @@ export function ReviewDemo() {
     await run(async () => {
       await reviewApi(`/api/tasks/${id}/activate`, { method: "POST" });
       setFiles([]); await loadTask(id); setMessage("已切换审核任务");
+    });
+  }
+
+  async function deleteTask(id: string) {
+    await run(async () => {
+      await reviewApi(`/api/tasks/${id}`, { method: "DELETE" });
+      setFiles([]); setDetail(null); setActiveTaskId(null);
+      setMessage("本地任务记录已删除，飞书电子表格已保留");
+      await loadTasks();
     });
   }
 
@@ -178,7 +210,7 @@ export function ReviewDemo() {
     const incoming = Array.from(list);
     const invalid = incoming.find((file) => !allowed.has(file.type) || file.size <= 0 || file.size > 2 * 1024 ** 3);
     if (invalid) return setMessage(`${invalid.name} 不符合 JPG、PNG、MP4 或 2GB 限制`);
-    setFiles((current) => [...current, ...incoming.map((file) => ({ id: crypto.randomUUID(), file, status: "queued" as const, progress: 0 }))]);
+    setFiles((current) => filesAfterSelection(current, incoming));
     setMessage("");
   }
 
@@ -243,14 +275,6 @@ export function ReviewDemo() {
     });
   }
 
-  async function updateManual(key: "anonymous_view" | "anonymous_edit", status: "pass" | "fail", note: string) {
-    if (!activeTaskId) return;
-    await run(async () => {
-      await reviewApi(`/api/tasks/${activeTaskId}/verifications/${key}`, jsonRequest("PATCH", { status, note }));
-      await loadTask(activeTaskId);
-    });
-  }
-
   const activeAccount = accounts.find((account) => account.id === activeAccountId);
   const accountStatus = activeAccount?.validationStatus === "valid"
     ? "应用凭证已验证"
@@ -259,9 +283,9 @@ export function ReviewDemo() {
   return <main className={styles.shell}>
     <header className={styles.hero}><div><span className={styles.eyebrow}>REUSABLE FEISHU REVIEW WORKSPACE</span><h1>飞书客户素材审核工具</h1><p>多账号、多任务、自定义工作表，一键导入图片与视频。</p></div><div className={`${styles.connection} ${activeAccountId ? styles.connected : ""}`}><span className={styles.dot} /><div><strong>{activeAccount?.name ?? "尚未配置飞书账号"}</strong><small>{accountStatus}</small></div></div></header>
     {message && <div className={styles.notice}>{message}</div>}
-    <AccountSwitcher accounts={accounts} activeAccountId={activeAccountId} disabled={busy} onActivate={activateAccount} onCreate={createAccount} onUpdate={updateAccount} />
+    <AccountSwitcher accounts={accounts} activeAccountId={activeAccountId} disabled={busy} onActivate={activateAccount} onCreate={createAccount} onUpdate={updateAccount} onDelete={deleteAccount} />
     {activeAccountId ? <div className={styles.workspace}>
-      <TaskSidebar tasks={tasks} activeTaskId={activeTaskId} disabled={busy} onActivate={activateTask} onCreate={createTask} />
+      <TaskSidebar tasks={tasks} activeTaskId={activeTaskId} disabled={busy} onActivate={activateTask} onCreate={createTask} onDelete={deleteTask} />
       <div className={styles.workspaceMain}>
         {detail ? <>
           <section className={styles.card}>
@@ -270,8 +294,6 @@ export function ReviewDemo() {
             <SheetSelector sheets={detail.sheets} activeSheetId={detail.task.activeTaskSheetId} disabled={busy} onActivate={activateSheet} onCreate={createSheet} onRetry={retrySheet} />
           </section>
           <UploadPanel files={files} targetSheetName={activeSheet?.name ?? null} busy={busy} onFiles={addFiles} onSynchronize={synchronize} onRetry={retryFailed} />
-          <section className={styles.card}><div className={styles.sectionTitle}><span>05</span><div><h2>同步记录</h2><p>素材编号和批次号在同一任务内持续递增。</p></div></div><div className={styles.syncList}>{detail.assets.length ? detail.assets.map((asset) => <div className={styles.syncRow} key={asset.id}><span className={asset.status === "completed" ? styles.passMark : styles.waitMark}>{asset.status === "completed" ? "✓" : "·"}</span><strong>{asset.materialNumber} · {asset.fileName}</strong><span>{asset.taskSheetId ? sheetNames.get(asset.taskSheetId) ?? "历史工作表" : "历史工作表"} · 第 {asset.batchNumber} 批</span><em>{asset.status}{asset.errorMessage ? ` · ${asset.errorMessage}` : ""}</em></div>) : <p className={styles.empty}>导入素材后，这里会显示真实记录。</p>}</div></section>
-          <VerificationPanel checks={detail.checks} overallStatus={detail.overallStatus} spreadsheetUrl={detail.task.spreadsheetUrl} onManual={updateManual} />
         </> : <section className={styles.card}><p className={styles.empty}>请在左侧创建或选择审核任务。</p></section>}
       </div>
     </div> : <section className={styles.card}><p className={styles.empty}>先在上方添加飞书应用账号。App Secret 只会加密保存在本机。</p></section>}

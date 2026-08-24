@@ -20,3 +20,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ accou
     return fail(error, "UPDATE_ACCOUNT_FAILED", code === "ACCOUNT_NOT_FOUND" ? 404 : 400);
   }
 }
+
+export async function DELETE(_request: Request, context: { params: Promise<{ accountId: string }> }) {
+  try {
+    const { accountId } = await context.params;
+    const app = getAppContext();
+    const result = app.accounts.delete(accountId);
+    app.accountRuntimes.invalidate(accountId);
+    return ok(result);
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+    return fail(error, "DELETE_ACCOUNT_FAILED", code === "ACCOUNT_NOT_FOUND" ? 404 : 400);
+  }
+}

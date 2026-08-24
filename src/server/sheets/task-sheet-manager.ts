@@ -14,15 +14,10 @@ export const REVIEW_HEADERS = [
   "素材",
   "审核",
   "客户意见",
-  "素材编号",
-  "批次",
-  "素材UUID",
-  "类型",
-  "文件Token",
-  "上传时间",
 ] as const;
 
 const REVIEW_SHEET_ROWS = 200;
+const REVIEW_SHEET_COLUMNS = 26;
 
 export interface TaskSheetApi {
   getWorkbookInfo(spreadsheetToken: string): Promise<{ sheets: WorkbookSheet[] }>;
@@ -32,7 +27,6 @@ export interface TaskSheetApi {
   getCellRange(spreadsheetToken: string, sheetId: string, range: string): Promise<CellRangeRead>;
   resizeRanges(spreadsheetToken: string, sheetId: string, operations: ResizeOperation[]): Promise<void>;
   freezeRows(spreadsheetToken: string, sheetId: string, count: number): Promise<void>;
-  hideColumns(spreadsheetToken: string, sheetId: string, range: string): Promise<void>;
   getSheetStructure(spreadsheetToken: string, sheetId: string): Promise<Record<string, unknown>>;
 }
 
@@ -63,10 +57,6 @@ function assertLayout(headers: CellRangeRead, structure: Record<string, unknown>
   if (!hasNumericProperty(structure, new Set(["frozen_rows", "freeze_rows", "frozenRows"]), 1)) {
     throw new Error("审核工作表首行冻结未生效");
   }
-  const serialized = JSON.stringify(structure);
-  const hidden = serialized.includes("D:I")
-    || hasNumericProperty(structure, new Set(["hidden_column_count", "hidden_columns_count"]), 6);
-  if (!hidden) throw new Error("审核工作表辅助列隐藏未生效");
 }
 
 function setupError(error: unknown): string {
@@ -129,7 +119,7 @@ export class TaskSheetManager {
           if (reusable.title !== name) await api.renameSheet(input.spreadsheetToken, reusable.sheetId, name);
           remote = { ...reusable, title: name };
         } else {
-          remote = await api.createSheet(input.spreadsheetToken, name, REVIEW_SHEET_ROWS, REVIEW_HEADERS.length);
+          remote = await api.createSheet(input.spreadsheetToken, name, REVIEW_SHEET_ROWS, REVIEW_SHEET_COLUMNS);
         }
         target = updateTaskSheet(this.db, target.id, {
           sheetId: remote.sheetId,
@@ -147,18 +137,15 @@ export class TaskSheetManager {
   }
 
   private async configure(api: TaskSheetApi, spreadsheetToken: string, sheetId: string): Promise<void> {
-    await api.setCellRange(spreadsheetToken, sheetId, "A1:I1", headerCells());
+    await api.setCellRange(spreadsheetToken, sheetId, "A1:C1", headerCells());
     await api.resizeRanges(spreadsheetToken, sheetId, [
-      { range: "A:A", width: 400 },
-      { range: "B:B", width: 120 },
+      { range: "A:B", width: 160 },
       { range: "C:C", width: 320 },
-      { range: "D:I", width: 100 },
       { range: "1:1", height: 32 },
     ]);
     await api.freezeRows(spreadsheetToken, sheetId, 1);
-    await api.hideColumns(spreadsheetToken, sheetId, "D:I");
     const [headers, structure] = await Promise.all([
-      api.getCellRange(spreadsheetToken, sheetId, "A1:I1"),
+      api.getCellRange(spreadsheetToken, sheetId, "A1:C1"),
       api.getSheetStructure(spreadsheetToken, sheetId),
     ]);
     assertLayout(headers, structure);

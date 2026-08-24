@@ -48,9 +48,8 @@ class FakeSheetsApi {
       throw new Error("freeze failed");
     }
   });
-  readonly hideColumns = vi.fn(async () => undefined);
   readonly getCellRange = vi.fn(async () => ({ cells: this.headerCells }));
-  readonly getSheetStructure = vi.fn(async () => ({ frozen_rows: 1, hidden_columns: ["D:I"] }));
+  readonly getSheetStructure = vi.fn(async () => ({ frozen_rows: 1 }));
   readonly getWorkbookInfo = vi.fn(async () => ({ sheets: this.sheets }));
 }
 
@@ -74,23 +73,20 @@ describe("每日审核工作表", () => {
       "0821素材审核",
       "0822素材审核",
     ]);
-    expect(api.setCellRange.mock.calls[0][2]).toBe("A1:I1");
+    expect(api.setCellRange.mock.calls[0][2]).toBe("A1:C1");
     expect(api.headerCells[0].map((cell) => cell.value)).toEqual([...REVIEW_HEADERS]);
     expect(api.resizeRanges).toHaveBeenCalledWith("sht1", "sheet-1", [
-      { range: "A:A", width: 400 },
-      { range: "B:B", width: 120 },
+      { range: "A:B", width: 160 },
       { range: "C:C", width: 320 },
-      { range: "D:I", width: 100 },
       { range: "1:1", height: 32 },
     ]);
     expect(api.freezeRows).toHaveBeenCalledWith("sht1", "sheet-1", 1);
-    expect(api.hideColumns).toHaveBeenCalledWith("sht1", "sheet-1", "D:I");
   });
 
   it("首次工作簿复用唯一默认工作表，同名冲突时使用含年份名称", async () => {
     const first = database();
     const firstApi = new FakeSheetsApi();
-    firstApi.sheets = [{ sheetId: "default", title: "Sheet1", rowCount: 200, columnCount: 9 }];
+    firstApi.sheets = [{ sheetId: "default", title: "Sheet1", rowCount: 200, columnCount: 3 }];
     const firstManager = new DailySheetManager(first.db, firstApi, () => "tab-default");
 
     const reused = await firstManager.ensure(
@@ -106,13 +102,13 @@ describe("每日审核工作表", () => {
 
     const second = database();
     const secondApi = new FakeSheetsApi();
-    secondApi.sheets = [{ sheetId: "old", title: "0821素材审核", rowCount: 200, columnCount: 9 }];
+    secondApi.sheets = [{ sheetId: "old", title: "0821素材审核", rowCount: 200, columnCount: 3 }];
     const secondManager = new DailySheetManager(second.db, secondApi, () => "tab-new-year");
 
     const created = await secondManager.ensure("p1", "sht2", new Date("2027-08-21T02:00:00+08:00"));
 
     expect(created.sheetName).toBe("20270821素材审核");
-    expect(secondApi.createSheet).toHaveBeenCalledWith("sht2", "20270821素材审核", 200, 9);
+    expect(secondApi.createSheet).toHaveBeenCalledWith("sht2", "20270821素材审核", 200, 26);
   });
 
   it("配置失败后保存远端 sheet_id，重试不重复创建", async () => {

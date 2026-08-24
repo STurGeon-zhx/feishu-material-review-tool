@@ -31,12 +31,12 @@ describe("飞书电子表格附件上传", () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ file_token: "file-simple" }));
     const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher));
 
-    const token = await uploader.upload(filePath, "demo.jpg", "spreadsheet-token");
+    const token = await uploader.upload(filePath, "demo.jpg", "spreadsheet-token", "image/jpeg");
 
     expect(token).toBe("file-simple");
     expect(new URL(String(fetcher.mock.calls[0][0])).pathname).toBe("/open-apis/drive/v1/medias/upload_all");
     const form = fetcher.mock.calls[0][1]?.body as FormData;
-    expect(form.get("parent_type")).toBe("sheet_file");
+    expect(form.get("parent_type")).toBe("sheet_image");
     expect(form.get("parent_node")).toBe("spreadsheet-token");
   });
 
@@ -58,7 +58,7 @@ describe("飞书电子表格附件上传", () => {
     });
     const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher));
 
-    const token = await uploader.upload(filePath, "large.mp4", "spreadsheet-token");
+    const token = await uploader.upload(filePath, "large.mp4", "spreadsheet-token", "video/mp4");
 
     expect(token).toBe("file-multipart");
     expect(prepareBody).toMatchObject({

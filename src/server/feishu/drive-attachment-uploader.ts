@@ -4,7 +4,11 @@ import { retryOperation } from "../core/retry";
 import { chooseUploadMode } from "../uploads/policy";
 import { FeishuHttpClient } from "./http-client";
 
-const DRIVE_PARENT_TYPE = "sheet_file";
+type SpreadsheetMediaParentType = "sheet_image" | "sheet_file";
+
+function parentTypeFor(mimeType: string): SpreadsheetMediaParentType {
+  return mimeType.startsWith("image/") ? "sheet_image" : "sheet_file";
+}
 
 interface ExistingAttachmentState {
   fileToken: string | null;
@@ -22,18 +26,30 @@ export function requiresSpreadsheetReupload(asset: ExistingAttachmentState): boo
 export class DriveAttachmentUploader {
   constructor(private readonly client: FeishuHttpClient) {}
 
-  async upload(filePath: string, originalName: string, spreadsheetToken: string): Promise<string> {
+  async upload(
+    filePath: string,
+    originalName: string,
+    spreadsheetToken: string,
+    mimeType: string,
+  ): Promise<string> {
     const fileSize = (await stat(filePath)).size;
+    const parentType = parentTypeFor(mimeType);
     return chooseUploadMode(fileSize) === "simple"
-      ? this.simpleUpload(filePath, originalName, fileSize, spreadsheetToken)
-      : this.multipartUpload(filePath, originalName, fileSize, spreadsheetToken);
+      ? this.simpleUpload(filePath, originalName, fileSize, spreadsheetToken, parentType)
+      : this.multipartUpload(filePath, originalName, fileSize, spreadsheetToken, parentType);
   }
 
-  private async simpleUpload(filePath: string, originalName: string, fileSize: number, spreadsheetToken: string) {
+  private async simpleUpload(
+    filePath: string,
+    originalName: string,
+    fileSize: number,
+    spreadsheetToken: string,
+    parentType: SpreadsheetMediaParentType,
+  ) {
     const fileName = originalName || basename(filePath);
     const form = new FormData();
     form.set("file_name", fileName);
-    form.set("parent_type", DRIVE_PARENT_TYPE);
+    form.set("parent_type", parentType);
     form.set("parent_node", spreadsheetToken);
     form.set("size", String(fileSize));
     form.set("file", new Blob([await readFile(filePath)]), fileName);
@@ -52,6 +68,7 @@ export class DriveAttachmentUploader {
     originalName: string,
     fileSize: number,
     spreadsheetToken: string,
+    parentType: SpreadsheetMediaParentType,
   ) {
     const fileName = originalName || basename(filePath);
     const prepared = await retryOperation(() =>
@@ -61,7 +78,7 @@ export class DriveAttachmentUploader {
           method: "POST",
           body: JSON.stringify({
             file_name: fileName,
-            parent_type: DRIVE_PARENT_TYPE,
+            parent_type: parentType,
             parent_node: spreadsheetToken,
             size: fileSize,
           }),

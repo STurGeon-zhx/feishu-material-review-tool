@@ -3,6 +3,7 @@ import { SingleFlight } from "../core/single-flight";
 import type { AppDatabase } from "../db/client";
 import {
   createOrGetProject,
+  deleteTaskRecords,
   getProject,
   getProjectByCreateKey,
   getTaskByName,
@@ -105,6 +106,24 @@ export class TaskService {
     const task = this.requireTaskForActiveAccount(taskId);
     this.accounts.setActiveTask(task.accountId!, task.id);
     return task;
+  }
+
+  delete(taskId: string) {
+    const task = this.requireTaskForActiveAccount(taskId);
+    const accountId = task.accountId!;
+    const currentActiveTaskId = this.accounts.get(accountId)?.activeTaskId ?? null;
+    deleteTaskRecords(this.db, taskId);
+    const nextActiveTaskId = currentActiveTaskId === taskId
+      ? listTasksByAccount(this.db, accountId)[0]?.id ?? null
+      : currentActiveTaskId;
+    if (currentActiveTaskId === taskId) {
+      this.accounts.setActiveTask(accountId, nextActiveTaskId);
+    }
+    return {
+      deletedTaskId: taskId,
+      activeTaskId: nextActiveTaskId,
+      remoteSpreadsheetUrl: task.spreadsheetUrl,
+    };
   }
 
   activateSheet(taskId: string, taskSheetId: string) {

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createDatabase } from "../db/client";
-import { assets, feishuAccounts, projects, sheetTabs, taskSheets } from "../db/schema";
+import { assets, destinationLocks, feishuAccounts, projects, sheetTabs, taskSheets, verificationChecks } from "../db/schema";
 import { CredentialCipher } from "../security/credential-cipher";
 import { AccountService, bootstrapLegacyWorkspace } from "./account-service";
 
@@ -25,6 +25,50 @@ describe("AccountService", () => {
     expect(service.get(first.id)?.appId).toBe("cli_a");
     expect(service.getCredentials(first.id).appSecret).toBe("secret-a2");
     expect(service.list().find((item) => item.id === first.id)?.appIdMasked).not.toContain("secret");
+    handle.close();
+  });
+
+  it("删除账号时级联清理本地任务记录、切换账号且重启后不重新导入环境凭证", async () => {
+    const handle = createDatabase(":memory:");
+    const cipher = new CredentialCipher(Buffer.alloc(32, 4));
+    let index = 0;
+    const service = new AccountService(handle.db, cipher, vi.fn(async () => undefined), () => `account-${++index}`);
+    const keep = await service.create({ name: "保留账号", appId: "cli_keep", appSecret: "keep" });
+    const removed = await service.create({ name: "删除账号", appId: "cli_remove", appSecret: "remove" });
+    handle.db.insert(projects).values({
+      id: "task-remove", createKey: "task-remove", localUserId: "service_app", name: "待删除任务",
+      resourceType: "sheet", requestedShareMode: "anyone_editable", accountId: removed.id,
+    }).run();
+    handle.db.insert(taskSheets).values({
+      id: "sheet-remove", taskId: "task-remove", createKey: "first", name: "首批",
+      normalizedName: "首批", setupStatus: "ready",
+    }).run();
+    handle.db.insert(assets).values({
+      id: "asset-remove", projectId: "task-remove", batchId: "batch", batchNumber: 1,
+      materialSequence: 1, materialNumber: "001", fileName: "demo.jpg", mimeType: "image/jpeg",
+      fileSize: 100, status: "completed",
+    }).run();
+    handle.db.insert(verificationChecks).values({
+      projectId: "task-remove", checkKey: "upload_jpg", source: "automatic", status: "pass",
+    }).run();
+    handle.db.insert(destinationLocks).values({ projectId: "task-remove", kind: "upload" }).run();
+
+    expect(service.delete(removed.id)).toMatchObject({
+      deletedAccountId: removed.id,
+      activeAccountId: keep.id,
+      deletedTaskCount: 1,
+    });
+    expect(service.getActive()?.id).toBe(keep.id);
+    expect(handle.db.select().from(projects).all()).toHaveLength(0);
+    expect(handle.db.select().from(taskSheets).all()).toHaveLength(0);
+    expect(handle.db.select().from(assets).all()).toHaveLength(0);
+    expect(handle.db.select().from(verificationChecks).all()).toHaveLength(0);
+    expect(handle.db.select().from(destinationLocks).all()).toHaveLength(0);
+
+    service.delete(keep.id);
+    bootstrapLegacyWorkspace(handle.db, cipher, { FEISHU_APP_ID: "cli_keep", FEISHU_APP_SECRET: "keep" });
+    expect(service.list()).toHaveLength(0);
+    expect(service.getActive()).toBeUndefined();
     handle.close();
   });
 });

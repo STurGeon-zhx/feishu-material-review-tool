@@ -71,17 +71,18 @@ class FakeSheetApi implements SheetWriteApi {
   readonly insertRows = vi.fn(async (_token: string, _sheetId: string, _position: number, count: number) => {
     this.rowCount += count;
   });
+  readonly resizeRanges = vi.fn(async () => undefined);
   failAfterRows?: number;
   writeError?: Error;
 
   async getWorkbookInfo(): Promise<{ sheets: WorkbookSheet[] }> {
-    return { sheets: [{ sheetId: "sheet-1", title: "0821素材审核", rowCount: this.rowCount, columnCount: 9 }] };
+    return { sheets: [{ sheetId: "sheet-1", title: "0821素材审核", rowCount: this.rowCount, columnCount: 3 }] };
   }
 
   async setCellRange(_token: string, _sheetId: string, range: string, cells: SheetCell[][]): Promise<void> {
     this.writes.push({ range, cells });
     if (this.writeError) throw this.writeError;
-    const match = range.match(/^A(\d+):I(\d+)$/);
+    const match = range.match(/^A(\d+):C(\d+)$/);
     if (!match) throw new Error(`unexpected write range ${range}`);
     const start = Number(match[1]);
     const count = this.failAfterRows ?? cells.length;
@@ -90,7 +91,7 @@ class FakeSheetApi implements SheetWriteApi {
   }
 
   async getCellRange(_token: string, _sheetId: string, range: string): Promise<CellRangeRead> {
-    const match = range.match(/^([A-I])(\d+):([A-I])(\d+)$/);
+    const match = range.match(/^([A-C])(\d+):([A-C])(\d+)$/);
     if (!match) throw new Error(`unexpected read range ${range}`);
     const startColumn = columnIndex(match[1]);
     const startRow = Number(match[2]);
@@ -104,7 +105,7 @@ class FakeSheetApi implements SheetWriteApi {
         const row = this.rows.get(startRow + index) ?? [];
         return row.slice(startColumn, endColumn + 1);
       });
-    return { cells, currentRegion: `A1:I${lastRow}` };
+    return { cells, currentRegion: `A1:C${lastRow}` };
   }
 }
 
@@ -115,7 +116,7 @@ function daily(handle: AppDatabaseHandle) {
 }
 
 describe("电子表格批次写入", () => {
-  it("扩容后写入附件、审核下拉和隐藏幂等字段，并在回读通过后完成", async () => {
+  it("扩容后仅写入素材、审核和客户意见，并在回读通过后完成", async () => {
     const handle = database();
     addBatch(handle, "batch-1", [
       { id: "asset-1", name: "one.mp4", type: "video/mp4", size: 1024 },
@@ -128,7 +129,7 @@ describe("电子表格批次写入", () => {
 
     expect(api.insertRows).toHaveBeenCalledWith("sht1", "sheet-1", 3, 200);
     expect(api.writes).toHaveLength(1);
-    expect(api.writes[0].range).toBe("A2:I3");
+    expect(api.writes[0].range).toBe("A2:C3");
     expect(api.writes[0].cells[0]).toEqual([
       { rich_text: [{
         type: "attachment",
@@ -145,12 +146,22 @@ describe("电子表格批次写入", () => {
         support_multiple_values: false,
       } },
       { value: "" },
-      { value: "001" },
-      { value: "第 1 批" },
-      { value: "asset-1" },
-      { value: "视频" },
-      { value: "file-1" },
-      { value: "2026-08-21T12:00:00.000+08:00" },
+    ]);
+    expect(api.writes[0].cells[1][0]).toEqual({
+      rich_text: [{
+        type: "embed-image",
+        text: "two.png",
+        image_name: "two.png",
+        image_token: "file-2",
+        image_width: 144,
+        image_height: 96,
+      }],
+    });
+    expect(api.resizeRanges).toHaveBeenCalledWith("sht1", "sheet-1", [
+      { range: "A:B", width: 160 },
+    ]);
+    expect(api.resizeRanges).toHaveBeenCalledWith("sht1", "sheet-1", [
+      { range: "3:3", height: 104 },
     ]);
     expect(handle.db.select().from(assets).where(eq(assets.id, "asset-1")).get()).toMatchObject({
       status: "completed",
@@ -161,7 +172,7 @@ describe("电子表格批次写入", () => {
     expect(getSheetTabByDate(handle.db, "p1", "2026-08-21")?.nextRow).toBe(4);
   });
 
-  it("UUID 已存在时按最新远端行号完成，不重复写入", async () => {
+  it("素材 Token 已存在时按最新远端行号完成，不重复写入", async () => {
     const handle = database();
     addBatch(handle, "batch-existing", [
       { id: "asset-existing", name: "existing.mp4", type: "video/mp4", size: 100 },
@@ -172,7 +183,7 @@ describe("电子表格批次写入", () => {
         type: "attachment", text: "existing.mp4", attachment_name: "existing.mp4",
         attachment_token: "file-1", file_size: 100, mime_type: "video/mp4",
       }] },
-      { value: "审核通过" }, {}, {}, {}, { value: "asset-existing" }, {}, { value: "file-1" }, {},
+      { value: "审核通过" }, {},
     ]);
 
     const result = await new SheetBatchFinalizer(handle.db, async () => api, daily(handle))
@@ -221,6 +232,10 @@ describe("电子表格批次写入", () => {
     await expect(finalizer.resumeProject("p1")).resolves.toEqual([
       { batchId: "batch-resume", completed: 1, failed: 0 },
     ]);
+    expect(api.writes[0].cells[0][0].rich_text?.[0]).toMatchObject({
+      type: "embed-image",
+      image_token: "file-1",
+    });
   });
 
   it("附件素材没有关联目标表时标记为需要重新上传", async () => {
@@ -261,7 +276,7 @@ describe("电子表格批次写入", () => {
     api.writeError = undefined;
     await finalizer.run("p1", "batch-retry-row");
 
-    expect(api.writes.at(-1)?.range).toBe("A2:I2");
+    expect(api.writes.at(-1)?.range).toBe("A2:C2");
     expect(getSheetTabByDate(handle.db, "p1", "2026-08-21")?.nextRow).toBe(3);
   });
 });

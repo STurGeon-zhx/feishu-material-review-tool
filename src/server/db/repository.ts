@@ -125,6 +125,20 @@ export function listTasksByAccount(db: AppDatabase, accountId: string) {
   )).orderBy(desc(projects.updatedAt), desc(projects.createdAt)).all();
 }
 
+export function deleteTaskRecords(db: AppDatabase, taskId: string) {
+  const task = getProject(db, taskId);
+  if (!task) return undefined;
+  db.transaction((tx) => {
+    tx.delete(destinationLocks).where(eq(destinationLocks.projectId, taskId)).run();
+    tx.delete(verificationChecks).where(eq(verificationChecks.projectId, taskId)).run();
+    tx.delete(assets).where(eq(assets.projectId, taskId)).run();
+    tx.delete(taskSheets).where(eq(taskSheets.taskId, taskId)).run();
+    tx.delete(sheetTabs).where(eq(sheetTabs.projectId, taskId)).run();
+    tx.delete(projects).where(eq(projects.id, taskId)).run();
+  });
+  return task;
+}
+
 export function getTaskByName(db: AppDatabase, accountId: string, normalizedName: string) {
   return listTasksByAccount(db, accountId).find((task) => task.name.trim().toLocaleLowerCase("zh-CN") === normalizedName);
 }

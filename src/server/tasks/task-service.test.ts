@@ -68,6 +68,16 @@ describe("TaskService", () => {
     await expect(tasks.create("duplicate", { name: "任务 a", firstSheetName: "不会创建" }))
       .rejects.toMatchObject({ code: "TASK_NAME_EXISTS" });
     expect(accountB.id).not.toBe(accountA.id);
+    const remoteToken = taskA.spreadsheetToken!;
+    expect(tasks.delete(taskA.id)).toMatchObject({
+      deletedTaskId: taskA.id,
+      activeTaskId: null,
+      remoteSpreadsheetUrl: firstUrl,
+    });
+    expect(tasks.getTask(taskA.id)).toBeUndefined();
+    expect(tasks.getSheets(taskA.id)).toHaveLength(0);
+    expect(accounts.get(accountA.id)?.activeTaskId).toBeNull();
+    expect(workbooks.has(remoteToken)).toBe(true);
     handle.close();
   });
 });

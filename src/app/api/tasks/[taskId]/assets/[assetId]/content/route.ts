@@ -56,6 +56,7 @@ export async function PUT(
       received.filePath,
       asset.fileName,
       task.spreadsheetToken,
+      received.detectedType,
     );
     const updated = updateAsset(app.database.db, assetId, {
       status: "uploaded",
