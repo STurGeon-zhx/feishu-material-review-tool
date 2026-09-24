@@ -1,4 +1,5 @@
 import type { AccountCredentials } from "./account-service";
+import { KeyedIntervalLimiter } from "../core/keyed-interval-limiter";
 import { FeishuHttpClient } from "../feishu/http-client";
 import { FeishuSheetsService } from "../feishu/sheets-service";
 import { TenantTokenProvider } from "../feishu/tenant-token";
@@ -10,6 +11,7 @@ interface CachedRuntime {
 
 export class AccountRuntimeRegistry {
   private readonly runtimes = new Map<string, CachedRuntime>();
+  private readonly mediaRequestLimiter = new KeyedIntervalLimiter(250);
 
   constructor(private readonly getCredentials: (accountId: string) => AccountCredentials) {}
 
@@ -29,5 +31,9 @@ export class AccountRuntimeRegistry {
   async createSheetsService(accountId: string): Promise<FeishuSheetsService> {
     const token = await this.getProvider(accountId).getToken();
     return new FeishuSheetsService(new FeishuHttpClient(token));
+  }
+
+  waitForMediaRequest(accountId: string): Promise<void> {
+    return this.mediaRequestLimiter.acquire(accountId);
   }
 }

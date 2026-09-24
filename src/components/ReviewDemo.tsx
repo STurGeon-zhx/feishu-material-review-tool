@@ -7,6 +7,7 @@ import { TaskSidebar } from "./TaskSidebar";
 import { UploadPanel } from "./UploadPanel";
 import { jsonRequest, reviewApi } from "./review-api";
 import type { AccountSummary, SelectedFile, TaskDetail, TaskSummary } from "./review-workspace-types";
+import { runStableUploadPool } from "./upload-pool";
 import styles from "./ReviewDemo.module.css";
 
 export function filesForNewBatch<T extends { status: string }>(files: T[]): T[] {
@@ -225,7 +226,7 @@ export function ReviewDemo() {
         files: pending.map(({ id, file }) => ({ id, name: file.name, type: file.type, size: file.size })),
       }));
       setFiles((current) => current.map((row) => row.status === "queued" ? { ...row, batchId: batch.batchId } : row));
-      for (const item of pending) {
+      await runStableUploadPool(pending, async (item) => {
         setFiles((current) => current.map((row) => row.id === item.id ? { ...row, status: "uploading" } : row));
         try {
           await uploadContent(activeTaskId, item, (progress) => setFiles((current) => current.map((row) => row.id === item.id ? { ...row, progress } : row)));
@@ -233,7 +234,7 @@ export function ReviewDemo() {
         } catch (error) {
           setFiles((current) => current.map((row) => row.id === item.id ? { ...row, status: "failed", error: error instanceof Error ? error.message : "上传失败" } : row));
         }
-      }
+      });
       const result = await reviewApi<{ completed: number; failed: number }>(`/api/tasks/${activeTaskId}/batches/${batch.batchId}/finalize`, { method: "POST" });
       const refreshed = await loadTask(activeTaskId);
       const byId = new Map(refreshed.assets.map((asset) => [asset.id, asset]));
@@ -252,14 +253,14 @@ export function ReviewDemo() {
     const retryable = files.filter((file) => file.status === "failed" && file.batchId);
     if (retryable.length === 0) return;
     await run(async () => {
-      for (const item of retryable) {
+      await runStableUploadPool(retryable, async (item) => {
         setFiles((current) => current.map((row) => row.id === item.id ? { ...row, status: "uploading", error: undefined } : row));
         try {
           await uploadContent(activeTaskId, item, (progress) => setFiles((current) => current.map((row) => row.id === item.id ? { ...row, progress } : row)));
         } catch (error) {
           setFiles((current) => current.map((row) => row.id === item.id ? { ...row, status: "failed", error: error instanceof Error ? error.message : "上传失败" } : row));
         }
-      }
+      });
       for (const batchId of new Set(retryable.map((file) => file.batchId!))) {
         await reviewApi(`/api/tasks/${activeTaskId}/batches/${batchId}/finalize`, { method: "POST" });
       }

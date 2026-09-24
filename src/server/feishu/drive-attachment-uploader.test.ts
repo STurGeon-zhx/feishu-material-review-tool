@@ -40,6 +40,41 @@ describe("飞书电子表格附件上传", () => {
     expect(form.get("parent_node")).toBe("spreadsheet-token");
   });
 
+  it("每次飞书素材请求都先经过限速器", async () => {
+    const filePath = join(directory(), "demo.jpg");
+    writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const order: string[] = [];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => {
+      order.push("request");
+      return response({ file_token: "file-simple" });
+    });
+    const uploader = new DriveAttachmentUploader(
+      new FeishuHttpClient("tenant-token", fetcher),
+      async () => { order.push("limit"); },
+    );
+
+    await uploader.upload(filePath, "demo.jpg", "spreadsheet-token", "image/jpeg");
+
+    expect(order).toEqual(["limit", "request"]);
+  });
+
+  it("飞书请求重试时再次经过限速器", async () => {
+    const filePath = join(directory(), "retry.jpg");
+    writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const limiter = vi.fn(async () => undefined);
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 1254291, msg: "busy" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      }))
+      .mockResolvedValueOnce(response({ file_token: "file-retried" }));
+    const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher), limiter);
+
+    await expect(uploader.upload(filePath, "retry.jpg", "spreadsheet-token", "image/jpeg"))
+      .resolves.toBe("file-retried");
+    expect(limiter).toHaveBeenCalledTimes(2);
+  });
+
   it("大文件分片上传也关联到目标电子表格", async () => {
     const filePath = join(directory(), "large.mp4");
     writeFileSync(filePath, Buffer.alloc(0));
@@ -56,7 +91,8 @@ describe("飞书电子表格附件上传", () => {
       if (path.endsWith("upload_finish")) return response({ file_token: "file-multipart" });
       return response({});
     });
-    const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher));
+    const limiter = vi.fn(async () => undefined);
+    const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher), limiter);
 
     const token = await uploader.upload(filePath, "large.mp4", "spreadsheet-token", "video/mp4");
 
@@ -74,6 +110,7 @@ describe("飞书电子表格附件上传", () => {
       "/open-apis/drive/v1/medias/upload_part",
       "/open-apis/drive/v1/medias/upload_finish",
     ]);
+    expect(limiter).toHaveBeenCalledTimes(5);
   });
 
   it("缺少电子表格关联的旧 file_token 必须重新上传", () => {

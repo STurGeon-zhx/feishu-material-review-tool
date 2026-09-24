@@ -8,3 +8,7 @@ data/*.key
 playwright-report/
 test-results/
 *.tsbuildinfo
+release/
+desktop/bin/
+desktop/obj/
+desktop/publish/

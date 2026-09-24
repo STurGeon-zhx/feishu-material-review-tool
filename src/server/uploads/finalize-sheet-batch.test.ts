@@ -68,6 +68,7 @@ class FakeSheetApi implements SheetWriteApi {
   rowCount = 2;
   readonly rows = new Map<number, SheetCell[]>();
   readonly writes: Array<{ range: string; cells: SheetCell[][] }> = [];
+  readonly reads: string[] = [];
   readonly insertRows = vi.fn(async (_token: string, _sheetId: string, _position: number, count: number) => {
     this.rowCount += count;
   });
@@ -91,6 +92,7 @@ class FakeSheetApi implements SheetWriteApi {
   }
 
   async getCellRange(_token: string, _sheetId: string, range: string): Promise<CellRangeRead> {
+    this.reads.push(range);
     const match = range.match(/^([A-C])(\d+):([A-C])(\d+)$/);
     if (!match) throw new Error(`unexpected read range ${range}`);
     const startColumn = columnIndex(match[1]);
@@ -130,6 +132,7 @@ describe("电子表格批次写入", () => {
     expect(api.insertRows).toHaveBeenCalledWith("sht1", "sheet-1", 3, 200);
     expect(api.writes).toHaveLength(1);
     expect(api.writes[0].range).toBe("A2:C3");
+    expect(api.reads).toEqual(["A2:A203", "A2:C3"]);
     expect(api.writes[0].cells[0]).toEqual([
       { rich_text: [{
         type: "attachment",
@@ -158,10 +161,10 @@ describe("电子表格批次写入", () => {
       }],
     });
     expect(api.resizeRanges).toHaveBeenCalledWith("sht1", "sheet-1", [
-      { range: "A:B", width: 160 },
-    ]);
-    expect(api.resizeRanges).toHaveBeenCalledWith("sht1", "sheet-1", [
       { range: "3:3", height: 104 },
+    ]);
+    expect(api.resizeRanges).not.toHaveBeenCalledWith("sht1", "sheet-1", [
+      { range: "A:B", width: 160 },
     ]);
     expect(handle.db.select().from(assets).where(eq(assets.id, "asset-1")).get()).toMatchObject({
       status: "completed",
@@ -191,8 +194,10 @@ describe("电子表格批次写入", () => {
 
     expect(result).toEqual({ completed: 1, failed: 0 });
     expect(api.writes).toHaveLength(0);
+    expect(api.reads).toEqual(["A2:A202", "A7:C7"]);
     expect(handle.db.select().from(assets).where(eq(assets.id, "asset-existing")).get())
       .toMatchObject({ status: "completed", sheetRowNumber: 7 });
+    expect(getSheetTabByDate(handle.db, "p1", "2026-08-21")?.nextRow).toBe(8);
   });
 
   it("写入响应不确定时逐项回查，只保留确实成功的行", async () => {

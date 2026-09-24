@@ -24,7 +24,17 @@ export function requiresSpreadsheetReupload(asset: ExistingAttachmentState): boo
 }
 
 export class DriveAttachmentUploader {
-  constructor(private readonly client: FeishuHttpClient) {}
+  constructor(
+    private readonly client: FeishuHttpClient,
+    private readonly waitForRequest: () => Promise<void> = async () => undefined,
+  ) {}
+
+  private request<T>(operation: () => Promise<T>): Promise<T> {
+    return retryOperation(async () => {
+      await this.waitForRequest();
+      return operation();
+    });
+  }
 
   async upload(
     filePath: string,
@@ -53,7 +63,7 @@ export class DriveAttachmentUploader {
     form.set("parent_node", spreadsheetToken);
     form.set("size", String(fileSize));
     form.set("file", new Blob([await readFile(filePath)]), fileName);
-    const data = await retryOperation(() =>
+    const data = await this.request(() =>
       this.client.json<{ file_token?: string }>("/open-apis/drive/v1/medias/upload_all", {
         method: "POST",
         body: form,
@@ -71,7 +81,7 @@ export class DriveAttachmentUploader {
     parentType: SpreadsheetMediaParentType,
   ) {
     const fileName = originalName || basename(filePath);
-    const prepared = await retryOperation(() =>
+    const prepared = await this.request(() =>
       this.client.json<{ upload_id?: string; block_size?: number; block_num?: number }>(
         "/open-apis/drive/v1/medias/upload_prepare",
         {
@@ -103,7 +113,7 @@ export class DriveAttachmentUploader {
         form.set("seq", String(sequence));
         form.set("size", String(bytesRead));
         form.set("file", new Blob([buffer]), `${fileName}.part${sequence}`);
-        await retryOperation(() =>
+        await this.request(() =>
           this.client.json("/open-apis/drive/v1/medias/upload_part", {
             method: "POST",
             body: form,
@@ -114,7 +124,7 @@ export class DriveAttachmentUploader {
       await handle.close();
     }
 
-    const finished = await retryOperation(() =>
+    const finished = await this.request(() =>
       this.client.json<{ file_token?: string }>("/open-apis/drive/v1/medias/upload_finish", {
         method: "POST",
         body: JSON.stringify({ upload_id: prepared.upload_id, block_num: prepared.block_num }),

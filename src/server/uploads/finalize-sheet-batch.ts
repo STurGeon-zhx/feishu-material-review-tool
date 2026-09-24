@@ -204,8 +204,8 @@ export class SheetBatchFinalizer {
   ): Promise<{ completed: number; failed: number }> {
     const token = project.spreadsheetToken!;
     const sheetId = taskSheet.sheetId;
-    await api.resizeRanges(token, sheetId, [{ range: "A:B", width: 160 }]);
-    const initialRead = await api.getCellRange(token, sheetId, "A2:A50000");
+    const scanEnd = Math.max(2, taskSheet.nextRow + pendingAssets.length + ROW_GROWTH_SIZE - 1);
+    const initialRead = await api.getCellRange(token, sheetId, `A2:A${scanEnd}`);
     let remoteIndex = this.remoteIndex(initialRead);
     let completed = 0;
     let failed = 0;
@@ -230,6 +230,7 @@ export class SheetBatchFinalizer {
       const maxRemoteRow = Math.max(1, ...[...remoteIndex.values()].map((row) => row.rowNumber));
       const startRow = Math.max(
         2,
+        taskSheet.nextRow,
         maxRemoteRow + 1,
       );
       const assignments = missing.map((asset, index) => ({ asset, rowNumber: startRow + index }));
@@ -268,6 +269,7 @@ export class SheetBatchFinalizer {
           const row = readback.cells[offset];
           if (this.rowMatches(row, assignment.asset)) {
             this.completeAsset(assignment.asset.id, sheetId, assignment.rowNumber);
+            remoteIndex.set(assignment.asset.fileToken!, { rowNumber: assignment.rowNumber });
             completed += 1;
           } else {
             this.failAsset(
@@ -279,13 +281,13 @@ export class SheetBatchFinalizer {
           }
         }
       }
-      remoteIndex = this.remoteIndex(await api.getCellRange(token, sheetId, "A2:A50000"));
-      const actualLastRow = Math.max(1, ...[...remoteIndex.values()].map((row) => row.rowNumber));
-      if (getTaskSheet(this.db, taskSheet.id)) {
-        updateTaskSheet(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
-      } else {
-        updateSheetTab(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
-      }
+    }
+
+    const actualLastRow = Math.max(taskSheet.nextRow - 1, 1, ...[...remoteIndex.values()].map((row) => row.rowNumber));
+    if (getTaskSheet(this.db, taskSheet.id)) {
+      updateTaskSheet(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
+    } else {
+      updateSheetTab(this.db, taskSheet.id, { nextRow: actualLastRow + 1 });
     }
 
     this.saveVerification(project, batchId, completed, failed, remoteIndex.size);

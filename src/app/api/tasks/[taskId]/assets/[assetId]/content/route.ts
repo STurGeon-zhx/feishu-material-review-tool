@@ -52,7 +52,10 @@ export async function PUT(
     });
     updateAsset(app.database.db, assetId, { status: "uploading" });
     const accessToken = await app.accountRuntimes.getProvider(task.accountId).getToken();
-    const fileToken = await new DriveAttachmentUploader(new FeishuHttpClient(accessToken)).upload(
+    const fileToken = await new DriveAttachmentUploader(
+      new FeishuHttpClient(accessToken),
+      () => app.accountRuntimes.waitForMediaRequest(task.accountId!),
+    ).upload(
       received.filePath,
       asset.fileName,
       task.spreadsheetToken,
