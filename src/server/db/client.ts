@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS assets (
   file_name TEXT NOT NULL,
   mime_type TEXT NOT NULL,
   file_size INTEGER NOT NULL,
+  import_mode TEXT NOT NULL DEFAULT 'preview',
   file_token TEXT,
   record_id TEXT,
   sheet_id TEXT,
@@ -158,6 +159,7 @@ export function createDatabase(filename: string) {
   ensureColumn(sqlite, "assets", "sheet_id", "sheet_id TEXT");
   ensureColumn(sqlite, "assets", "task_sheet_id", "task_sheet_id TEXT");
   ensureColumn(sqlite, "assets", "sheet_row_number", "sheet_row_number INTEGER");
+  ensureColumn(sqlite, "assets", "import_mode", "import_mode TEXT NOT NULL DEFAULT 'preview'");
   return {
     db: drizzle(sqlite, { schema }),
     sqlite,

@@ -6,8 +6,8 @@ import { FeishuHttpClient } from "./http-client";
 
 type SpreadsheetMediaParentType = "sheet_image" | "sheet_file";
 
-function parentTypeFor(mimeType: string): SpreadsheetMediaParentType {
-  return mimeType.startsWith("image/") ? "sheet_image" : "sheet_file";
+function parentTypeFor(mimeType: string, importMode: "preview" | "attachment"): SpreadsheetMediaParentType {
+  return importMode === "preview" && mimeType.startsWith("image/") ? "sheet_image" : "sheet_file";
 }
 
 interface ExistingAttachmentState {
@@ -41,9 +41,10 @@ export class DriveAttachmentUploader {
     originalName: string,
     spreadsheetToken: string,
     mimeType: string,
+    importMode: "preview" | "attachment" = "preview",
   ): Promise<string> {
     const fileSize = (await stat(filePath)).size;
-    const parentType = parentTypeFor(mimeType);
+    const parentType = parentTypeFor(mimeType, importMode);
     return chooseUploadMode(fileSize) === "simple"
       ? this.simpleUpload(filePath, originalName, fileSize, spreadsheetToken, parentType)
       : this.multipartUpload(filePath, originalName, fileSize, spreadsheetToken, parentType);

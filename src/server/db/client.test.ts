@@ -60,6 +60,8 @@ describe("SQLite 增量迁移", () => {
       );
       INSERT INTO projects (id, create_key, local_user_id, name, requested_share_mode)
       VALUES ('legacy-base', 'legacy-key', 'service_app', '旧 Base', 'anyone_editable');
+      INSERT INTO assets (id, project_id, batch_id, batch_number, material_sequence, material_number, file_name, mime_type, file_size)
+      VALUES ('legacy-image', 'legacy-base', 'batch-1', 1, 1, '001', 'old.jpg', 'image/jpeg', 1024);
     `);
     legacy.close();
 
@@ -75,9 +77,11 @@ describe("SQLite 增量迁移", () => {
         "resource_type", "spreadsheet_token", "spreadsheet_url",
       ]));
       expect(assetColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
-        "sheet_id", "sheet_row_number",
+        "sheet_id", "sheet_row_number", "import_mode",
       ]));
       expect(project).toEqual({ id: "legacy-base", resource_type: "base" });
+      expect(handle.sqlite.prepare("SELECT import_mode FROM assets WHERE id = 'legacy-image'").get())
+        .toEqual({ import_mode: "preview" });
     } finally {
       handle.close();
     }

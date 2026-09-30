@@ -40,6 +40,18 @@ describe("飞书电子表格附件上传", () => {
     expect(form.get("parent_node")).toBe("spreadsheet-token");
   });
 
+  it("图片选择附件模式时使用 sheet_file 上传点", async () => {
+    const filePath = join(directory(), "attachment.png");
+    writeFileSync(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ file_token: "file-image" }));
+    const uploader = new DriveAttachmentUploader(new FeishuHttpClient("tenant-token", fetcher));
+
+    await expect(uploader.upload(filePath, "attachment.png", "spreadsheet-token", "image/png", "attachment"))
+      .resolves.toBe("file-image");
+    const form = fetcher.mock.calls[0][1]?.body as FormData;
+    expect(form.get("parent_type")).toBe("sheet_file");
+  });
+
   it("每次飞书素材请求都先经过限速器", async () => {
     const filePath = join(directory(), "demo.jpg");
     writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));

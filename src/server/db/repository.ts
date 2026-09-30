@@ -296,6 +296,7 @@ export function registerBatch(
   batchId: string,
   files: Array<{ id: string; name: string; type: string; size: number }>,
   taskSheetId?: string,
+  importMode: "preview" | "attachment" = "preview",
 ) {
   if (files.length === 0) throw new Error("至少选择一个文件");
   files.forEach(validateDeclaredFile);
@@ -320,6 +321,7 @@ export function registerBatch(
       fileName: file.name,
       mimeType: file.type,
       fileSize: file.size,
+      importMode,
       taskSheetId: taskSheetId ?? null,
     }));
     tx.insert(assets).values(rows).run();

@@ -7,6 +7,7 @@ import { toTaskAssetDto } from "@/server/tasks/task-dto";
 
 const schema = z.object({
   taskSheetId: z.string().min(1),
+  importMode: z.enum(["preview", "attachment"]).default("preview"),
   files: z.array(z.object({
     id: z.string().min(1),
     name: z.string().min(1),
@@ -26,7 +27,7 @@ export async function POST(request: Request, context: { params: Promise<{ taskId
       return fail(new Error("任务或目标工作表不可登记新批次"), "TASK_NOT_ACCEPTING_BATCHES", 409);
     }
     const batchId = randomUUID();
-    const rows = registerBatch(db, taskId, batchId, input.files, input.taskSheetId);
+    const rows = registerBatch(db, taskId, batchId, input.files, input.taskSheetId, input.importMode);
     return ok({ batchId, batchNumber: rows[0].batchNumber, assets: rows.map(toTaskAssetDto) }, 201);
   } catch (error) {
     return fail(error, "CREATE_BATCH_FAILED", 400);

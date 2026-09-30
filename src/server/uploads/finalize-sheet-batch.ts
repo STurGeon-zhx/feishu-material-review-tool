@@ -77,7 +77,7 @@ function mediaToken(cell: SheetCell | undefined): string | undefined {
 
 function assetCells(asset: typeof assets.$inferSelect): SheetCell[] {
   const fileToken = asset.fileToken!;
-  const mediaCell: SheetCell = asset.mimeType.startsWith("image/")
+  const mediaCell: SheetCell = asset.importMode === "preview" && asset.mimeType.startsWith("image/")
     ? {
       rich_text: [{
         type: "embed-image",
@@ -250,7 +250,7 @@ export class SheetBatchFinalizer {
         let writeError: unknown;
         try {
           const imageRows = chunk
-            .filter(({ asset }) => asset.mimeType.startsWith("image/"))
+            .filter(({ asset }) => asset.importMode === "preview" && asset.mimeType.startsWith("image/"))
             .map(({ rowNumber }) => ({ range: `${rowNumber}:${rowNumber}`, height: 104 }));
           if (imageRows.length > 0) await api.resizeRanges(token, sheetId, imageRows);
           await api.setCellRange(

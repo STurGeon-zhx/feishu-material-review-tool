@@ -5,6 +5,7 @@ import { AccountSwitcher } from "./AccountSwitcher";
 import { SheetSelector } from "./SheetSelector";
 import { TaskSidebar } from "./TaskSidebar";
 import { UploadPanel } from "./UploadPanel";
+import { UpdateChecker } from "./UpdateChecker";
 import { jsonRequest, reviewApi } from "./review-api";
 import type { AccountSummary, SelectedFile, TaskDetail, TaskSummary } from "./review-workspace-types";
 import { runStableUploadPool } from "./upload-pool";
@@ -58,6 +59,7 @@ export function ReviewDemo() {
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [files, setFiles] = useState<SelectedFile[]>([]);
+  const [importMode, setImportMode] = useState<"preview" | "attachment">("preview");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -223,6 +225,7 @@ export function ReviewDemo() {
       setMessage(`正在导入到「${activeSheet.name}」…`);
       const batch = await reviewApi<{ batchId: string }>(`/api/tasks/${activeTaskId}/batches`, jsonRequest("POST", {
         taskSheetId: activeSheet.id,
+        importMode,
         files: pending.map(({ id, file }) => ({ id, name: file.name, type: file.type, size: file.size })),
       }));
       setFiles((current) => current.map((row) => row.status === "queued" ? { ...row, batchId: batch.batchId } : row));
@@ -282,7 +285,7 @@ export function ReviewDemo() {
     : activeAccount ? "旧版凭证已迁移，使用时自动验证" : "添加 App ID 与 App Secret 后开始";
 
   return <main className={styles.shell}>
-    <header className={styles.hero}><div><span className={styles.eyebrow}>REUSABLE FEISHU REVIEW WORKSPACE</span><h1>飞书客户素材审核工具</h1><p>多账号、多任务、自定义工作表，一键导入图片与视频。</p></div><div className={`${styles.connection} ${activeAccountId ? styles.connected : ""}`}><span className={styles.dot} /><div><strong>{activeAccount?.name ?? "尚未配置飞书账号"}</strong><small>{accountStatus}</small></div></div></header>
+    <header className={styles.hero}><div><span className={styles.eyebrow}>REUSABLE FEISHU REVIEW WORKSPACE</span><h1>飞书客户素材审核工具</h1><p>多账号、多任务、自定义工作表，一键导入图片与视频。</p></div><div className={styles.heroSide}><div className={`${styles.connection} ${activeAccountId ? styles.connected : ""}`}><span className={styles.dot} /><div><strong>{activeAccount?.name ?? "尚未配置飞书账号"}</strong><small>{accountStatus}</small></div></div><UpdateChecker /></div></header>
     {message && <div className={styles.notice}>{message}</div>}
     <AccountSwitcher accounts={accounts} activeAccountId={activeAccountId} disabled={busy} onActivate={activateAccount} onCreate={createAccount} onUpdate={updateAccount} onDelete={deleteAccount} />
     {activeAccountId ? <div className={styles.workspace}>
@@ -294,7 +297,7 @@ export function ReviewDemo() {
             <div className={styles.projectMeta}><span>状态：{detail.task.setupStatus}</span><span>权限：{detail.task.effectiveShareMode ?? "待回读"}</span><span>工作表：{detail.sheets.length}</span><span>素材：{detail.assets.length}</span></div>
             <SheetSelector sheets={detail.sheets} activeSheetId={detail.task.activeTaskSheetId} disabled={busy} onActivate={activateSheet} onCreate={createSheet} onRetry={retrySheet} />
           </section>
-          <UploadPanel files={files} targetSheetName={activeSheet?.name ?? null} busy={busy} onFiles={addFiles} onSynchronize={synchronize} onRetry={retryFailed} />
+          <UploadPanel files={files} targetSheetName={activeSheet?.name ?? null} busy={busy} importMode={importMode} onImportModeChange={setImportMode} onFiles={addFiles} onSynchronize={synchronize} onRetry={retryFailed} />
         </> : <section className={styles.card}><p className={styles.empty}>请在左侧创建或选择审核任务。</p></section>}
       </div>
     </div> : <section className={styles.card}><p className={styles.empty}>先在上方添加飞书应用账号。App Secret 只会加密保存在本机。</p></section>}

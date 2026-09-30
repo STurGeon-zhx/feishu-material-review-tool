@@ -84,10 +84,18 @@ describe("可复用飞书素材审核工具", () => {
       { id: "uploading", file: new File(["b"], "上传中.mp4", { type: "video/mp4" }), status: "uploading", progress: 50 },
       { id: "done", file: new File(["c"], "已完成.png", { type: "image/png" }), status: "completed", progress: 100 },
     ];
-    render(<UploadPanel files={files} targetSheetName="审核表" busy={false} onFiles={vi.fn()} onSynchronize={async () => undefined} onRetry={async () => undefined} />);
+    render(<UploadPanel files={files} targetSheetName="审核表" busy={false} importMode="preview" onImportModeChange={vi.fn()} onFiles={vi.fn()} onSynchronize={async () => undefined} onRetry={async () => undefined} />);
     expect(screen.getByLabelText("素材上传队列")).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: "整体上传进度" })).toHaveAttribute("aria-valuenow", "50");
     expect(screen.getByText("总素材").nextElementSibling).toHaveTextContent("3");
+    expect(screen.getByRole("radio", { name: "图片预览（默认）" })).toBeChecked();
+  });
+
+  it("可选择将图片作为附件导入", () => {
+    const onImportModeChange = vi.fn();
+    render(<UploadPanel files={[]} targetSheetName="审核表" busy={false} importMode="preview" onImportModeChange={onImportModeChange} onFiles={vi.fn()} onSynchronize={async () => undefined} onRetry={async () => undefined} />);
+    fireEvent.click(screen.getByRole("radio", { name: "附件" }));
+    expect(onImportModeChange).toHaveBeenCalledWith("attachment");
   });
 
   it("未配置账号时只显示本地应用凭证入口，不显示 OAuth 或机器人入口", async () => {

@@ -175,6 +175,30 @@ describe("电子表格批次写入", () => {
     expect(getSheetTabByDate(handle.db, "p1", "2026-08-21")?.nextRow).toBe(4);
   });
 
+  it("附件模式的图片写入附件且不增加预览行高，失败重试保持原模式", async () => {
+    const handle = database();
+    registerBatch(handle.db, "p1", "batch-attachment", [
+      { id: "image-attachment", name: "photo.jpg", type: "image/jpeg", size: 1234 },
+    ], undefined, "attachment");
+    handle.db.update(assets).set({ status: "uploaded", fileToken: "file-image" })
+      .where(eq(assets.id, "image-attachment")).run();
+    const api = new FakeSheetApi();
+    const finalizer = new SheetBatchFinalizer(handle.db, async () => api, daily(handle));
+
+    await expect(finalizer.run("p1", "batch-attachment")).resolves.toEqual({ completed: 1, failed: 0 });
+    expect(api.writes[0].cells[0][0]).toEqual({ rich_text: [{
+      type: "attachment",
+      text: "photo.jpg",
+      attachment_name: "photo.jpg",
+      attachment_token: "file-image",
+      file_size: 1234,
+      mime_type: "image/jpeg",
+    }] });
+    expect(api.resizeRanges).not.toHaveBeenCalled();
+    expect(handle.db.select().from(assets).where(eq(assets.id, "image-attachment")).get())
+      .toMatchObject({ importMode: "attachment", status: "completed" });
+  });
+
   it("素材 Token 已存在时按最新远端行号完成，不重复写入", async () => {
     const handle = database();
     addBatch(handle, "batch-existing", [

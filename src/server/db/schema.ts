@@ -73,6 +73,7 @@ export const assets = sqliteTable(
     fileName: text("file_name").notNull(),
     mimeType: text("mime_type").notNull(),
     fileSize: integer("file_size").notNull(),
+    importMode: text("import_mode", { enum: ["preview", "attachment"] }).notNull().default("preview"),
     fileToken: text("file_token"),
     recordId: text("record_id"),
     sheetId: text("sheet_id"),

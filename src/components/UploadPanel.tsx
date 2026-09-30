@@ -30,12 +30,14 @@ interface Props {
   files: SelectedFile[];
   targetSheetName: string | null;
   busy: boolean;
+  importMode: "preview" | "attachment";
+  onImportModeChange(mode: "preview" | "attachment"): void;
   onFiles(files: FileList | File[]): void;
   onSynchronize(): Promise<void>;
   onRetry(): Promise<void>;
 }
 
-export function UploadPanel({ files, targetSheetName, busy, onFiles, onSynchronize, onRetry }: Props) {
+export function UploadPanel({ files, targetSheetName, busy, importMode, onImportModeChange, onFiles, onSynchronize, onRetry }: Props) {
   const queued = files.filter((file) => file.status === "queued").length;
   const processing = files.filter((file) => file.status === "uploading" || file.status === "uploaded").length;
   const completed = files.filter((file) => file.status === "completed").length;
@@ -50,6 +52,12 @@ export function UploadPanel({ files, targetSheetName, busy, onFiles, onSynchroni
       <input type="file" multiple accept="image/jpeg,image/png,video/mp4" onChange={(event) => event.target.files && onFiles(event.target.files)} />
       <strong>拖入图片 / 视频</strong><span>或点击选择本地文件</span><small>{targetSheetName ? `将导入到：${targetSheetName}` : "请先选择目标工作表"}</small>
     </label>
+    <fieldset className={styles.importMode} disabled={busy}>
+      <legend>图片导入方式</legend>
+      <label><input type="radio" name="importMode" value="preview" checked={importMode === "preview"} onChange={() => onImportModeChange("preview")} /> 图片预览（默认）</label>
+      <label><input type="radio" name="importMode" value="attachment" checked={importMode === "attachment"} onChange={() => onImportModeChange("attachment")} /> 附件</label>
+      <small>视频始终以附件导入；此设置只影响下一批图片。</small>
+    </fieldset>
     <div className={styles.uploadSummary}>
       {[
         ["总素材", files.length, ""],
